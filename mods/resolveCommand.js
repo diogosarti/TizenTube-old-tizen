@@ -209,7 +209,9 @@ function customAction(action, parameters) {
             kE.which = 27;
             document.dispatchEvent(kE);
 
-            document.querySelector('video').currentTime = parameters.time;
+            if (window.__legacyDirect) {
+                document.querySelector('.html5-video-player').seekTo(parameters.time, true);
+            } else document.querySelector('video').currentTime = parameters.time;
             break;
         case 'TT_SETTINGS_SHOW':
             modernUI();

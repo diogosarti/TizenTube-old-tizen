@@ -152,10 +152,14 @@ function execute_once_dom_loaded() {
       evt.defaultPrevented
     );
 
-    if (evt.keyCode in keys) {
+    if (evt.type === 'keydown' && evt.keyCode in keys) {
       const percentage = keys[evt.keyCode] * 10;
       const video = document.querySelector('video');
-      video.currentTime = (percentage / 100) * video.duration;
+      if (video && isFinite(video.duration)) {
+        const time = (percentage / 100) * video.duration;
+        if (window.__legacyDirect) document.querySelector('.html5-video-player').seekTo(time, true);
+        else video.currentTime = time;
+      }
     }
 
     const container = document.getElementById('container');

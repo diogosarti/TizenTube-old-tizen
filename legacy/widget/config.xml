@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://tizentube.app/legacy-icon-test" version="2.2.0" viewmodes="maximized">
+    <name>TizenTube-old-tizen</name>
+    <content src="index.html"/>
+    <icon src="icon-launcher.png"/>
+    <access origin="*" subdomains="true"/>
+    <tizen:allow-navigation href="*"/>
+    <tizen:application id="TTIconT029.IconTest" package="TTIconT029" required_version="2.4"/>
+    <tizen:profile name="tv-samsung"/>
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+    <tizen:metadata key="http://samsung.com/tv/metadata/prelaunch.support" value="false"/>
+    <tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"/>
+</widget>

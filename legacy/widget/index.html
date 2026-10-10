@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>TizenTube Legacy</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#10151e;color:#eee;font-family:Arial,sans-serif;overflow:hidden}
+#setup{padding:65px}h1{font-size:48px}p{font-size:25px;line-height:1.5}button{font-size:26px;padding:16px;border:3px solid #777;background:#1c2635;color:white;margin-right:20px}button:focus{border-color:#67d7ff;outline:none}
+#player{display:none;position:absolute;left:0;top:0;width:100%;height:100%;border:0;background:#000}
+#log{display:none;pointer-events:none;position:absolute;z-index:2147483647;bottom:0;left:0;right:0;max-height:25%;overflow:hidden;padding:12px;background:rgba(0,0,0,.92);font-size:19px;white-space:pre-wrap;word-wrap:break-word;margin:0}
+#feedback{display:none;pointer-events:none;position:absolute;z-index:2147483646;top:44%;left:20%;right:20%;text-align:center;font-size:25px}#feedback span{background:rgba(0,0,0,.8);padding:12px 20px;border-radius:8px;display:inline-block}
+#busy-spinner{position:relative;width:72px;height:72px;margin:0 auto 28px;-webkit-animation:legacy-clockwise 1s linear infinite;animation:legacy-clockwise 1s linear infinite}
+#busy-spinner i{position:absolute;width:8px;height:8px;border-radius:50%;background:white}
+#busy-spinner i:nth-child(1){left:32px;top:0;opacity:1}#busy-spinner i:nth-child(2){left:55px;top:9px;opacity:.2}#busy-spinner i:nth-child(3){left:64px;top:32px;opacity:.3}#busy-spinner i:nth-child(4){left:55px;top:55px;opacity:.4}#busy-spinner i:nth-child(5){left:32px;top:64px;opacity:.5}#busy-spinner i:nth-child(6){left:9px;top:55px;opacity:.6}#busy-spinner i:nth-child(7){left:0;top:32px;opacity:.7}#busy-spinner i:nth-child(8){left:9px;top:9px;opacity:.85}
+@-webkit-keyframes legacy-clockwise{from{-webkit-transform:rotate(0deg)}to{-webkit-transform:rotate(360deg)}}
+@keyframes legacy-clockwise{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+</style></head><body>
+<div id="setup"><h1>TizenTube Legacy 2.2.0</h1><p id="status">Connecting to YouTube…</p><div id="options" style="display:none"><p><button id="connect">Restart TizenTube</button><button id="baseline">Try without modifications</button></p><p>Red / 1: log · 2: restart · Blue / 4: diagnostics<br>Green in player: settings · Arrows and Enter: select · Return in diagnostics: exit<br>Logs are kept in memory and hidden by default.</p><p>YouTube: HTTPS · TLS version is unavailable through the browser API.</p></div></div>
+<iframe id="player" title="YouTube" allowfullscreen></iframe><pre id="log"></pre>
+<div id="feedback" role="status"><div id="busy-spinner" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span id="feedback-text"></span></div>
+<script src="logger.js"></script><script src="widget.js"></script>
+</body></html>

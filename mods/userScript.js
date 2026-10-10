@@ -1,5 +1,5 @@
 import initPatches from "./features/standaloneUserscript.js";
-if (window.location.hostname === 'localhost') {
+if (window.location.hostname === 'localhost' && !window.__legacyRedirect) {
     initPatches();
 }
 import "./features/userAgentSpoofing.js";
@@ -25,3 +25,4 @@ import "./ui/customUI.js";
 import "./ui/customGuideAction.js";
 import "./features/autoFrameRate.js";
 import "./ui/clock.js";
+if (window.__legacyLog) window.__legacyLog.record('mods.ready', 'TizenTube ES5 initialization completed');

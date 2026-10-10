@@ -1,0 +1,3 @@
+/* Keep the native layout for visibility detection; the shell draws its own spinner. */
+yt-spinner [idomkey="dotted spinner"],
+yt-spinner [idomkey="solid spinner"] { opacity: 0 !important; }

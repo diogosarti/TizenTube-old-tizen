@@ -1,25 +1,16 @@
 {
-  "name": "@foxreis/tizentube",
-  "appName": "TizenTube",
-  "version": "1.15.1",
-  "description": "TizenTube is an ad-free and sponsor-free solution for your favourite streaming website on your Tizen (Samsung) TVs.",
-  "packageType": "mods",
-  "websiteURL": "https://youtube.com/tv?additionalDataUrl=http%3A%2F%2Flocalhost%3A8085%2Fdial%2Fapps%2FYouTube",
-  "main": "dist/userScript.js",
+  "name": "tizentube-old-tizen",
+  "version": "2.2.0",
+  "private": true,
+  "description": "Standalone YouTube with SponsorBlock for older Samsung TVs; tested on KU6000 / Tizen 2.4.0.",
+  "scripts": {
+    "build": "npm --prefix legacy run build",
+    "test": "npm --prefix legacy test"
+  },
   "author": "Reis Can",
-  "serviceFile": "dist/service.js",
-  "keys": [
-    "MediaPlayPause",
-    "MediaPlay",
-    "MediaPause",
-    "MediaStop",
-    "MediaFastForward",
-    "MediaRewind",
-    "MediaTrackNext",
-    "MediaTrackPrevious"
-  ],
   "repository": {
-    "url": "https://github.com/reisxd/TizenTube"
+    "type": "git",
+    "url": "https://github.com/numbereleven-a/TizenTube-old-tizen.git"
   },
   "license": "GPL-3.0-only"
 }

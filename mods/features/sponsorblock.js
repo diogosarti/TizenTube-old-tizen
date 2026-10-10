@@ -92,6 +92,11 @@ class SponsorBlockHandler {
         JSON.stringify(categories)
       )}`
     );
+    if (resp.status === 404) {
+      if (window.__legacyLog) window.__legacyLog.record('sponsor.empty', 'No segments');
+      return;
+    }
+    if (!resp.ok) throw new Error('SponsorBlock HTTP=' + resp.status);
     const results = await resp.json();
 
     const result = results.find((v) => v.videoID === this.videoID);
@@ -99,10 +104,12 @@ class SponsorBlockHandler {
 
     if (!result || !result.segments || !result.segments.length) {
       console.info(this.videoID, 'No segments found.');
+      if (window.__legacyLog) window.__legacyLog.record('sponsor.empty', 'No segments');
       return;
     }
 
     this.segments = result.segments;
+    if (window.__legacyLog) window.__legacyLog.record('sponsor.loaded', 'segments=' + this.segments.length);
     this.manualSkippableCategories = configRead('sponsorBlockManualSkips');
     this.skippableCategories = this.getSkippableCategories();
 
@@ -110,7 +117,7 @@ class SponsorBlockHandler {
       const slider = document.querySelector('div[idomkey="slider"]');
       const sliderRect = slider?.getBoundingClientRect();
       const isOldUI = !document.querySelector('div[idomkey="Metadata-Section"]');
-      if (isOldUI && sliderRect) {
+      if (isOldUI && sliderRect && this.segmentsoverlay) {
         this.segmentsoverlay.style.setProperty('top', `${sliderRect.top}px`, 'important');
       }
       this.scheduleSkip();
@@ -231,11 +238,6 @@ class SponsorBlockHandler {
           }
         }
 
-        if (document.querySelector('ytlr-progress-bar').getAttribute('hybridnavfocusable') === 'false') {
-          this.segmentsoverlay.style.setProperty('display', 'none', 'important');
-        } else {
-          this.segmentsoverlay.style.setProperty('display', 'block', 'important');
-        }
       });
     });
 
@@ -337,9 +339,11 @@ class SponsorBlockHandler {
         if (configRead('enableSponsorBlockToasts')) {
           showToast('SponsorBlock', t('sponsorblock.toasts.skipping', { segment: skipName }));
         }
-        if (this.video.duration - end < 1) {
-          this.video.currentTime = end - 1;
-        } else this.video.currentTime = end;
+        if (window.__legacyLog) window.__legacyLog.record('sponsor.skip-request', segment.category + '; target=' + end);
+        const target = this.video.duration - end < 1 ? end - 1 : end;
+        if (window.__legacyDirect) {
+          document.querySelector('.html5-video-player').seekTo(target, true);
+        } else this.video.currentTime = target;
         this.scheduleSkip();
       }
     }, (start - this.video.currentTime) * 1000);
@@ -397,10 +401,9 @@ class SponsorBlockHandler {
 // shows my lack of understanding of javascript. (or both)
 window.sponsorblock = null;
 
-window.addEventListener(
-  'hashchange',
-  () => {
-    const newURL = new URL(location.hash.substring(1), location.href);
+function handleVideoChange() {
+    // srcdoc has an about: URL; the document base points to YouTube.
+    const newURL = new URL(location.hash.substring(1), document.baseURI);
     // A hack, but it works, so...
     const videoID = newURL.search.replace('?v=', '').split('&')[0];
     const needsReload =
@@ -427,11 +430,14 @@ window.addEventListener(
 
       if (configRead('enableSponsorBlock')) {
         window.sponsorblock = new SponsorBlockHandler(videoID);
-        window.sponsorblock.init();
+        window.sponsorblock.init().catch((err) => {
+          console.warn('SponsorBlock initialization failed:', err);
+          if (window.__legacyLog) window.__legacyLog.record('sponsor.error', err.message);
+        });
       } else {
         console.info('SponsorBlock disabled, not loading');
       }
     }
-  },
-  false
-);
+}
+window.addEventListener('hashchange', handleVideoChange, false);
+handleVideoChange();
