@@ -11,7 +11,7 @@ The app runs entirely on the TV. It loads the YouTube TV interface directly and 
 | | |
 |---|---|
 | App name | TizenTube-old-tizen |
-| Package version | 2.3.8 |
+| Package version | 2.3.9 |
 | Upstream base | [TizenTube Standalone v2.1.1](https://github.com/reisxd/TizenTube/releases/tag/v2.1.1) |
 | License | GPL-3.0-only; see [LICENSE](LICENSE) and [third-party notices](legacy/THIRD_PARTY_NOTICES.txt) |
 | Release | [Download the installation package](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) |
@@ -21,7 +21,7 @@ The app runs entirely on the TV. It loads the YouTube TV interface directly and 
 
 The release ZIP contains an unsigned WGT. Sign it with a Samsung certificate profile that includes your TV's DUID before installation. Personal certificates and device-specific signatures are not included in the download.
 
-1. Download `TizenTube-old-tizen-v2.3.8.zip` from the [latest release](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) and extract `TizenTube-old-tizen-v2.3.8-resign-required.wgt`.
+1. Download `TizenTube-old-tizen-v2.3.9.zip` from the [latest release](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) and extract `TizenTube-old-tizen-v2.3.9-resign-required.wgt`.
 2. Install Tizen Studio with Samsung TV Extension and Certificate Manager.
 3. Enable Developer Mode, connect the TV, and create a Samsung certificate profile for it. See Samsung's [certificate guide](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/creating-certificates.html) and [TV connection guide](https://developer.samsung.com/smarttv/develop/getting-started/using-sdk/tv-device.html).
 4. [Import the WGT as a Tizen project](https://developer.samsung.com/smarttv/develop/getting-started/creating-tv-applications/importing-tv-applications.html), select your certificate profile, and package it again.
@@ -80,10 +80,10 @@ npm --prefix legacy test
 npm --prefix legacy run build
 ```
 
-The build checks packaged JavaScript for ES5 compatibility and produces `artifacts/2.3.8/TizenTube-old-tizen-v2.3.8.zip`. Sign the staged widget with your own certificate profile:
+The build checks packaged JavaScript for ES5 compatibility and produces `artifacts/2.3.9/TizenTube-old-tizen-v2.3.9.zip`. Sign the staged widget with your own certificate profile:
 
 ```text
-tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.3.8/signed -- legacy/dist/widget-2.3.8
+tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.3.9/signed -- legacy/dist/widget-2.3.9
 ```
 
 The `legacy/widget` launcher is the released application. The older `standalone` and service sources are retained from upstream and are not included in this WGT.

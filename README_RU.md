@@ -11,7 +11,7 @@
 | | |
 |---|---|
 | Название приложения | TizenTube-old-tizen |
-| Версия пакета | 2.3.8 |
+| Версия пакета | 2.3.9 |
 | Основа | [TizenTube Standalone v2.1.1](https://github.com/reisxd/TizenTube/releases/tag/v2.1.1) |
 | Лицензия | GPL-3.0-only; см. [LICENSE](LICENSE) и [уведомления сторонних компонентов](legacy/THIRD_PARTY_NOTICES.txt) |
 | Релиз | [Скачать установочный пакет](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) |
@@ -21,7 +21,7 @@
 
 В ZIP из релиза находится неподписанный WGT. Перед установкой его нужно подписать профилем сертификата Samsung, который включает DUID вашего телевизора. Личные сертификаты и подписи для конкретного устройства в архив не входят.
 
-1. Скачайте `TizenTube-old-tizen-v2.3.8.zip` из [последнего релиза](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) и извлеките `TizenTube-old-tizen-v2.3.8-resign-required.wgt`.
+1. Скачайте `TizenTube-old-tizen-v2.3.9.zip` из [последнего релиза](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) и извлеките `TizenTube-old-tizen-v2.3.9-resign-required.wgt`.
 2. Установите Tizen Studio, Samsung TV Extension и Certificate Manager.
 3. Включите Developer Mode, подключите ТВ и создайте для него профиль сертификата Samsung. См. [инструкцию по сертификатам](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/creating-certificates.html) и [подключению телевизора](https://developer.samsung.com/smarttv/develop/getting-started/using-sdk/tv-device.html).
 4. [Импортируйте WGT как проект Tizen](https://developer.samsung.com/smarttv/develop/getting-started/creating-tv-applications/importing-tv-applications.html), выберите свой профиль сертификата и соберите подписанный пакет.
@@ -80,10 +80,10 @@ npm --prefix legacy test
 npm --prefix legacy run build
 ```
 
-Сборка проверяет JavaScript пакета на совместимость с ES5 и создаёт `artifacts/2.3.8/TizenTube-old-tizen-v2.3.8.zip`. Подпишите подготовленный виджет своим профилем сертификата:
+Сборка проверяет JavaScript пакета на совместимость с ES5 и создаёт `artifacts/2.3.9/TizenTube-old-tizen-v2.3.9.zip`. Подпишите подготовленный виджет своим профилем сертификата:
 
 ```text
-tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.3.8/signed -- legacy/dist/widget-2.3.8
+tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.3.9/signed -- legacy/dist/widget-2.3.9
 ```
 
 Релиз собирается из загрузчика `legacy/widget`. Старые каталоги `standalone` и исходники сервисов сохранены из upstream и в этот WGT не включены.
