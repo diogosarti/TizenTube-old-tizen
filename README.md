@@ -2,7 +2,7 @@
 
 [README на русском](README_RU.md)
 
-This is a fork of [reisxd/TizenTube](https://github.com/reisxd/TizenTube), based on **TizenTube Standalone v2.1.1** and adapted for older Samsung TVs. Its main difference is **YouTube playback with SponsorBlock on Tizen 2.4.0**. Later upstream module changes are also retained.
+This is a fork of [reisxd/TizenTube](https://github.com/reisxd/TizenTube), based on **TizenTube Standalone v2.1.1** and adapted for older Samsung TVs. Its main difference is **YouTube playback with SponsorBlock on Tizen 2.4.0**. **TLS 1.3 support is enabled for API and video requests**, with automatic TLS 1.2–1.3 negotiation by default. Later upstream module changes are also retained.
 
 The app runs entirely on the TV. It loads the YouTube TV interface directly and adds TizenTube modifications through a launcher adapted to the older WebKit engine. No computer, external proxy or local service is needed during viewing.
 
