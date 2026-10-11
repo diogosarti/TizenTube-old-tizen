@@ -7,3 +7,4 @@ package-lock.json
 AGENTS.md
 artifacts/
 legacy/dist/
+legacy/native/build/

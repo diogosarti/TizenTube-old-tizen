@@ -1,3 +1,10 @@
+Native HTTPS transport:
+Mbed TLS 3.6.7 — Apache License 2.0 (LICENSE-MbedTLS.txt).
+Samsung Native Client SDK Pepper 42 — notices in NOTICE-NaCl.txt.
+Mozilla public CA bundle, exported by curl — MPL 2.0 (LICENSE-CA.txt).
+The corresponding CA source is included as ca-roots.pem.
+zlib 1.3.2 — zlib license (LICENSE-zlib.txt).
+
 DOMRect polyfill (Financial Times polyfill-library)
 
 The MIT License (MIT)

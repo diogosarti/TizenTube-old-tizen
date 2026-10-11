@@ -129,6 +129,7 @@ test('widget starts with mods and keeps baseline playback in diagnostics', () =>
     XHR.prototype.abort = function () { this.aborted = true; };
     const context = {
         window: {}, location: { href: 'file:///index.html' }, XMLHttpRequest: XHR, LegacyLogger: Logger,
+        LegacyTLS: { create: () => ({ install() {} }) },
         document: { getElementById: id => elements[id], addEventListener() {} },
         setTimeout: (callback, delay) => { if (delay === 0) navigation = callback; return 1; }, clearTimeout() {}
     };

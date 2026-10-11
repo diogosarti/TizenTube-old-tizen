@@ -1,4 +1,10 @@
 {
+  "legacyNetwork": {
+    "title": "Network / TLS",
+    "status": "Interface/API (NaCl): {{api}} · Video (NaCl): {{video}} · System: unknown",
+    "scope": "Applies to new NaCl HTTPS requests. Restart playback to replace existing connections. System resource TLS is unknown.",
+    "modes": { "auto": "Auto (TLS 1.2–1.3)", "1_2": "Force TLS 1.2", "1_3": "Force TLS 1.3" }
+  },
     "__contributors": [
         "reisxd"
     ],

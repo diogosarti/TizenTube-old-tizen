@@ -15,6 +15,7 @@ const defaultConfig = {
   enableSponsorBlockHighlight: true,
   videoSpeed: 1,
   preferredVideoQuality: 'auto',
+  tlsMode: 'auto',
   enableDeArrow: true,
   enableDeArrowThumbnails: false,
   focusContainerColor: '#0f0f0f',
@@ -92,6 +93,7 @@ export function configWrite(key, value) {
   console.info('Setting key', key, 'to', value);
   localConfig[key] = value;
   window.localStorage[CONFIG_KEY] = JSON.stringify(localConfig);
+  if (key === 'tlsMode' && window.__legacyDirect && parent.__legacyTLS) parent.__legacyTLS.setMode(value);
   configChangeEmitter.dispatchEvent(new CustomEvent('configChange', { detail: { key, value } }));
 }
 

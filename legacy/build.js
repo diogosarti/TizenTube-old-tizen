@@ -32,6 +32,11 @@ async function build() {
     const files = {
         'config.xml': 'widget/config.xml', 'index.html': 'widget/index.html', 'widget.js': 'widget/widget.js', 'player.html': 'widget/player.html',
         'logger.js': 'web/logger.js', 'frame.js': 'web/frame.js', 'player.css': 'widget/player.css',
+        'tls-transport.js': 'web/tls-transport.js', 'tls-client.nmf': 'native/assets/tls-client.nmf', 'tls-client.nexe': 'native/assets/tls-client.nexe',
+        'LICENSE-MbedTLS.txt': 'native/assets/LICENSE-MbedTLS.txt', 'NOTICE-NaCl.txt': 'native/assets/NOTICE-NaCl.txt',
+        'LICENSE-CA.txt': 'native/assets/LICENSE-CA.txt',
+        'LICENSE-zlib.txt': 'native/assets/LICENSE-zlib.txt',
+        'ca-roots.pem': 'native/assets/ca-roots.pem',
         'compat.js': 'dist/direct-compat.js', 'userScript.js': 'dist/userScript.js',
         'icon-launcher.png': 'widget/icon.png', 'LICENSE': '../LICENSE'
     };

@@ -42,6 +42,12 @@
         }, 250);
     });
     window.__legacyLog = log;
+    var tlsTransport = LegacyTLS.create(document.getElementById('tls-module'), log, function (info) {
+        document.getElementById('tls-summary').textContent = 'Mode: ' + info.mode + ' · Interface/API (NaCl): ' + info.api +
+            ' · Video (NaCl): ' + info.video + ' · System stack: unknown';
+    });
+    window.__legacyTLS = tlsTransport;
+    tlsTransport.install(window);
     function render() {
         panel.style.display = visible ? 'block' : 'none';
         if (!visible) return;
@@ -78,7 +84,7 @@
             pending = null; log.record('page.received', 'HTTP=200; bytes=' + xhr.responseText.length);
             showFeedback('Starting YouTube…');
             var html = xhr.responseText.replace(/\s(?:integrity|nonce|crossorigin)=(?:"[^"]*"|'[^']*')/gi, '');
-            html = html.replace(/<head([^>]*)>/i, '$&<base href="https://www.youtube.com/tv"><style>[idomkey="lazy-debug-watermark"],.ZI6lfc{display:none!important}</style><link rel="stylesheet" href="' + widgetBase + 'player.css">' + script('logger.js') + script('frame.js') + script('compat.js'));
+            html = html.replace(/<head([^>]*)>/i, '$&<base href="https://www.youtube.com/tv"><style>[idomkey="lazy-debug-watermark"],.ZI6lfc{display:none!important}</style><link rel="stylesheet" href="' + widgetBase + 'player.css">' + script('logger.js') + script('frame.js') + '<script>parent.__legacyTLS.install(window);</script>' + script('compat.js'));
             html = html.replace(/<body([^>]*)>/i, '$&<script>if(window.ytcfg)ytcfg.set("USE_NET_AJAX_FOR_PING_TRANSPORT",true);</script>' + (mode === 'mods' ? script('userScript.js') : ''));
             bootTimer = setTimeout(function () {
                 menu(); status.textContent = 'YouTube did not start. Press Red / 1 for details.';

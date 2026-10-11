@@ -38,6 +38,7 @@
         var video = document.querySelector('video');
         var mediaStatus = '';
         function updateStatus() {
+            if (video && /^https?:/i.test(video.currentSrc || '') && parent.__legacyTLS) parent.__legacyTLS.system('video');
             var text = mediaStatus;
             if (!text) {
                 var spinners = document.querySelectorAll('yt-spinner');

@@ -1,5 +1,5 @@
 import { configRead } from '../config.js';
-import { showModal, buttonItem, overlayPanelItemListRenderer, scrollPaneRenderer, overlayMessageRenderer, QrCodeRenderer } from './ytUI.js';
+import { showModal, buttonItem, overlayPanelItemListRenderer, overlayMessageRenderer, QrCodeRenderer } from './ytUI.js';
 import qrcode from 'qrcode-npm';
 import { t } from 'i18next';
 import resolveCommand from '../resolveCommand.js';
@@ -7,24 +7,21 @@ import resolveCommand from '../resolveCommand.js';
 const qrcodes = {};
 
 export default function modernUI(update, parameters) {
+    const tls = window.__legacyDirect && parent.__legacyTLS ? parent.__legacyTLS.summary() : null;
+    const tlsStatus = tls ? t('legacyNetwork.status', { api: tls.api, video: tls.video }) : '';
     const settings = [
-        {
-            name: t('settings.supportTT.title'),
-            icon: 'MONEY_HEART',
+        tls ? {
+            name: t('legacyNetwork.title'),
+            icon: 'SETTINGS',
             value: null,
-            options: {
-                title: t('settings.supportTT.title'),
-                subtitle: t('settings.supportTT.subtitle'),
-                content: scrollPaneRenderer([
-                    overlayMessageRenderer(t('settings.supportTT.content.1')),
-                    overlayMessageRenderer(t('settings.supportTT.content.2')),
-                    overlayMessageRenderer(t('settings.supportTT.content.3')),
-                    overlayMessageRenderer(t('settings.supportTT.content.4')),
-                    overlayMessageRenderer(t('settings.supportTT.content.5')),
-                    overlayMessageRenderer(t('settings.supportTT.content.6'))
-                ])
-            }
-        },
+            subtitle: tlsStatus,
+            menuId: 'tt-tls-mode',
+            menuHeader: { title: t('legacyNetwork.title'), subtitle: tlsStatus + ' · ' + t('legacyNetwork.scope') },
+            options: ['auto', '1.2', '1.3'].map(mode => ({
+                name: t('legacyNetwork.modes.' + mode.replace('.', '_')),
+                key: 'tlsMode', value: mode
+            }))
+        } : null,
         {
             name: t('settings.options.socialMedia.title'),
             icon: 'PRIVACY_UNLISTED',
