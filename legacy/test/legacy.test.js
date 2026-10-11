@@ -212,10 +212,13 @@ test('SponsorBlock initializes in a local document and treats missing segments a
         console: { info() {}, warn() {} }, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
         setInterval: fn => { intervals.push(fn); return intervals.length; }, clearInterval() {},
         MutationObserver: function (fn) { mutations = fn; this.observe = () => {}; this.disconnect = () => {}; },
-        fetch: async url => {
-            requests.push(url);
-            if (requests.length === 2) return { status: 404, json: () => { throw new Error('404 must not be parsed'); } };
-            return { status: 200, ok: true, json: async () => [{ videoID: 'abcdefghijk', segments: [{ category: 'sponsor', segment: [1, 3], UUID: 'synthetic' }] }] };
+        XMLHttpRequest: function () {
+            this.open = (method, url) => { requests.push(url); };
+            this.send = () => {
+                this.status = requests.length === 2 ? 404 : 200;
+                this.responseText = this.status === 404 ? '' : JSON.stringify([{ videoID: 'abcdefghijk', segments: [{ category: 'sponsor', segment: [1, 3], UUID: 'synthetic' }] }]);
+                this.onload();
+            };
         }
     };
     vm.runInNewContext(source, context);

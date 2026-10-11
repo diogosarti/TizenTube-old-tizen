@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## v2.3.9
+
+- Added the actual googlevideo TLS protocol in the upper-right corner of the player controls, with an option to hide it.
+- Added SponsorBlock availability display modes: hidden, only when unavailable (default), or always.
+- Set player indicator defaults to show the TLS protocol and display SponsorBlock status only when unavailable; Auto remains the default TLS mode.
+
 ## v2.3.8 — 2026-10-11
 
 - Added TLS 1.3 support for YouTube API requests and video playback on older Tizen TVs.

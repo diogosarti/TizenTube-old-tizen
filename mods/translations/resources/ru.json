@@ -1,9 +1,17 @@
 {
   "legacyNetwork": {
-    "title": "Сеть / TLS",
+    "title": "Соединение TLS",
     "status": "Интерфейс/API (NaCl): {{api}} · Видео (NaCl): {{video}} · Системный стек: неизвестно",
     "scope": "Для новых HTTPS-запросов NaCl. Перезапустите видео для смены соединений. TLS системных ресурсов неизвестен.",
-    "modes": { "auto": "Авто (TLS 1.2–1.3)", "1_2": "Принудительно TLS 1.2", "1_3": "Принудительно TLS 1.3" }
+    "playerVideo": "Googlevideo: {{transport}}",
+    "playerAudio": "Аудио: {{transport}}",
+    "indicators": "Индикаторы плеера",
+    "showProtocol": "Показывать протокол воспроизведения",
+    "showSponsorStatus": "Показывать доступность SponsorBlock",
+    "statusDisplay": { "never": "Не показывать", "unavailable": "Только когда недоступен", "always": "Всегда" },
+    "sponsorStatus": { "checking": "SponsorBlock: проверка…", "available": "SponsorBlock: доступен", "unavailable": "SponsorBlock: недоступен", "disabled": "SponsorBlock: выключен" },
+    "unknown": "неизвестно",
+    "modes": { "auto": "Авто (TLS 1.3 / 1.2)", "1_2": "Принудительно TLS 1.2", "1_3": "Принудительно TLS 1.3" }
   },
     "__contributors": [
         "BlackFlux"

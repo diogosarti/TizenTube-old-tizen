@@ -57,6 +57,7 @@ const sponsorblockAPI = 'https://sponsor.ajay.app/api';
 class SponsorBlockHandler {
   video = null;
   active = true;
+  availability = 'checking';
 
   attachVideoTimeout = null;
   nextSkipTimeout = null;
@@ -74,6 +75,24 @@ class SponsorBlockHandler {
     this.videoID = videoID;
   }
 
+  requestSegments(url) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', url);
+      xhr.onload = () => {
+        if (xhr.status === 404) { resolve([]); return; }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error('SponsorBlock HTTP=' + xhr.status));
+          return;
+        }
+        try { resolve(JSON.parse(xhr.responseText)); } catch (err) { reject(err); }
+      };
+      xhr.onerror = () => reject(new Error('SponsorBlock network error'));
+      xhr.ontimeout = () => reject(new Error('SponsorBlock timeout'));
+      xhr.send();
+    });
+  }
+
   async init() {
     const videoHash = sha256(this.videoID).substring(0, 4);
     const categories = [
@@ -87,17 +106,17 @@ class SponsorBlockHandler {
       'music_offtopic',
       'poi_highlight'
     ];
-    const resp = await fetch(
-      `${sponsorblockAPI}/skipSegments/${videoHash}?categories=${encodeURIComponent(
-        JSON.stringify(categories)
-      )}`
-    );
-    if (resp.status === 404) {
-      if (window.__legacyLog) window.__legacyLog.record('sponsor.empty', 'No segments');
-      return;
+    let results;
+    const url = `${sponsorblockAPI}/skipSegments/${videoHash}?categories=${encodeURIComponent(JSON.stringify(categories))}`;
+    try {
+      results = await this.requestSegments(url);
+      this.availability = 'available';
+    } catch (err) {
+      this.availability = 'unavailable';
+      throw err;
     }
-    if (!resp.ok) throw new Error('SponsorBlock HTTP=' + resp.status);
-    const results = await resp.json();
+
+    if (!this.active) return;
 
     const result = results.find((v) => v.videoID === this.videoID);
     console.info(this.videoID, 'Got it:', result);

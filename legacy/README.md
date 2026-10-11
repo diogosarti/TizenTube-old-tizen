@@ -75,6 +75,10 @@ Settings and shell diagnostics display the latest actually negotiated NaCl TLS s
 
 The module's read-only `inspect()` diagnostics contain request IDs, parser byte counts and pending-operation flags only. URLs, headers, bodies, cookies and account credentials are not included in those diagnostics or the in-memory log.
 
+The player controls opened with Enter show the transport that delivered successful googlevideo media data, rather than the configured mode or an API connection. The indication is reset for a new media ID and ignores data from previous streams. If separately identified audio uses another transport, its value is also shown. System playback is shown as unknown.
+
+Player indicators settings can hide the playback protocol (shown by default) and show SponsorBlock availability never, only when unavailable (default), or always. Both appear in the upper-right corner with the player controls. SponsorBlock status comes from the existing segment request for the current video, without additional probes. A successful response without segments or HTTP 404 means available; network, HTTP and response parsing errors mean unavailable. Always mode also shows checking and disabled states.
+
 ## Verified behavior
 
 Version 2.3.8 was tested on Samsung KU6000 with Tizen 2.4. Auto negotiated verified TLS 1.3 for YouTube API and video requests and verified TLS 1.2 for a TLS-1.2-only endpoint. Forced TLS 1.3 rejected that endpoint without falling back. Negotiation is per connection; one TLS 1.2 result does not downgrade other connections. Auto does not make a separate forced-TLS-1.2 attempt after a network failure.

@@ -60,12 +60,12 @@
     function create(container, log, changed) {
         var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = 'auto';
         var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 };
-        var last = { api: 'unknown', video: 'unknown' }, diagnostics = [];
+        var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], mediaKey = '', media = { video: 'unknown', audio: 'unknown' };
         try { mode = validMode(JSON.parse(root.localStorage.getItem(CONFIG_KEY) || '{}').tlsMode); } catch (_) {}
         function notify() { if (changed) changed(summary()); }
         function summary() {
             return { mode: mode, api: last.api, video: last.video, system: 'unknown', active: active, queued: queue.length,
-                completed: stats.completed, bytes: stats.bytes, errors: stats.errors, ready: ready, failed: failed };
+                audio: media.audio, completed: stats.completed, bytes: stats.bytes, errors: stats.errors, ready: ready, failed: failed };
         }
         function record(group, tls) {
             last[group] = tls;
@@ -101,6 +101,12 @@
         }
         function request(method, url, h, body, callback) {
             var r = { id: ++sequence, method: method, url: url, headers: h, body: body, callback: callback, mode: mode, redirects: 0, retries: 0, group: category(resolve(root, url)) };
+            var u = resolve(root, url), key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search);
+            if (r.group === 'video' && u.pathname === '/videoplayback') {
+                r.mediaKey = key ? key[1] : mediaKey;
+                r.mediaKind = mime && /^audio(?:%2f|\/)/i.test(mime[1]) ? 'audio' : 'video';
+                if (r.mediaKey !== mediaKey) { mediaKey = r.mediaKey; media = { video: 'unknown', audio: 'unknown' }; last.video = 'unknown'; notify(); }
+            }
             requests[r.id] = r; queue.push(r);
             if (failed) setTimeout(function () { remove(r); callback({ type: 'error', error: 'NaCl transport unavailable' }); }, 0);
             else pump();
@@ -124,7 +130,8 @@
             var r = requests[m.id]; if (!r || !r.callback) return;
             if (m.type === 'tls') {
                 if (!m.verified) { var rejected = r.callback; abort(r); rejected({ type: 'error', error: 'Certificate verification failed' }); return; }
-                record(r.group, m.tls.replace('TLSv', 'TLS '));
+                r.transport = m.tls.replace('TLSv', 'TLS ');
+                if (r.group !== 'video') record(r.group, r.transport);
                 log.record('tls.connection', r.group + '; ' + m.tls + '; verified=true; mode=' + r.mode);
             } else if (m.type === 'headers') {
                 var h = headers(m.headers), redirect = h.location && [301, 302, 303, 307, 308].indexOf(m.status) >= 0;
@@ -142,6 +149,8 @@
                     r.url = next.href; requeue(r); return;
                 }
                 m.headers = h; m.url = r.url;
+                r.mediaSuccess = m.status === 200 || m.status === 206;
+                if (/^audio\//i.test(h['content-type'] || '')) r.mediaKind = 'audio';
             } else if (m.type === 'done' || m.type === 'error') {
                 if (m.type === 'error' && m.retryable && r.retries++ < 1) {
                     log.record('tls.retry', r.group + '; reset before HTTP; mode=' + r.mode);
@@ -151,7 +160,14 @@
                 if (m.type === 'done') stats.completed++;
                 else { stats.errors++; log.record('tls.request-error', r.group + '; ' + m.error); }
                 notify();
-            } else if (m.type === 'data') { stats.bytes += m.body.byteLength; }
+            } else if (m.type === 'data') {
+                stats.bytes += m.body.byteLength;
+                if (r.mediaKind && r.mediaSuccess && r.mediaKey === mediaKey && r.transport) {
+                    media[r.mediaKind] = r.transport;
+                    if (r.mediaKind === 'video') record('video', r.transport);
+                    else notify();
+                }
+            }
             r.callback(m);
         }, true);
         container.addEventListener('error', moduleFailure, true);
@@ -166,7 +182,7 @@
                 // Already-open connections retain their negotiated version until playback/reload creates new ones.
                 notify(); log.record('tls.mode', mode);
             },
-            system: function (group) { if (group === 'video' && last.video !== 'unknown') { last.video = 'unknown'; notify(); } },
+            system: function (group) { if (group === 'video' && last.video !== 'unknown') { last.video = 'unknown'; media = { video: 'unknown', audio: 'unknown' }; notify(); } },
             inspect: function () { module.postMessage({ type: 'inspect' }); return diagnostics; },
             install: function (win) { install(win, api); }
         };

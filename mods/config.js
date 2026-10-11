@@ -16,6 +16,8 @@ const defaultConfig = {
   videoSpeed: 1,
   preferredVideoQuality: 'auto',
   tlsMode: 'auto',
+  showPlayerProtocol: true,
+  sponsorBlockStatusDisplay: 'unavailable',
   enableDeArrow: true,
   enableDeArrowThumbnails: false,
   focusContainerColor: '#0f0f0f',
@@ -81,6 +83,10 @@ try {
 }
 
 export function configRead(key) {
+  if (key === 'tlsMode' && !['auto', '1.2', '1.3'].includes(localConfig[key])) {
+    localConfig[key] = 'auto';
+    window.localStorage[CONFIG_KEY] = JSON.stringify(localConfig);
+  }
   if (localConfig[key] === undefined) {
     console.warn('Populating key', key, 'with default value', defaultConfig[key]);
     localConfig[key] = defaultConfig[key];

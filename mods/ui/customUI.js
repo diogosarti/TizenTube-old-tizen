@@ -5,6 +5,43 @@ import { configRead } from "../config.js";
 import { ButtonRenderer } from "./ytUI.js";
 import { t } from 'i18next';
 
+// Show request results alongside the player's controls without extra network checks.
+if (window.__legacyDirect && parent.__legacyTLS) {
+    setInterval(() => {
+        const controls = document.querySelector('ytlr-player-actions-container');
+        let badge = document.querySelector('.tt-media-transport');
+        if (!controls) {
+            if (badge) badge.style.display = 'none';
+            return;
+        }
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'tt-media-transport';
+            badge.style.cssText = 'position:fixed;right:36px;top:36px;z-index:10000;padding:8px 14px;background:rgba(0,0,0,.75);color:white;font-size:26px;border-radius:6px;pointer-events:none;white-space:pre;';
+            document.body.appendChild(badge);
+        }
+        const state = parent.__legacyTLS.summary();
+        const label = value => value === 'unknown' ? t('legacyNetwork.unknown') : value;
+        const lines = [];
+        if (configRead('showPlayerProtocol')) {
+            lines.push(t('legacyNetwork.playerVideo', { transport: label(state.video) }));
+            if (state.audio && state.audio !== 'unknown' && state.audio !== state.video) {
+                lines[0] += ' · ' + t('legacyNetwork.playerAudio', { transport: label(state.audio) });
+            }
+        }
+        const display = configRead('sponsorBlockStatusDisplay');
+        const availability = !configRead('enableSponsorBlock') ? 'disabled' :
+            window.sponsorblock ? window.sponsorblock.availability : 'checking';
+        if (display === 'always' || (display === 'unavailable' && availability === 'unavailable')) {
+            lines.push(t('legacyNetwork.sponsorStatus.' + availability));
+        }
+        badge.textContent = lines.join('\n');
+        const style = window.getComputedStyle(controls);
+        badge.style.display = !lines.length || controls.classList.contains('zylon-hidden') || style.display === 'none' ||
+            style.visibility === 'hidden' || +style.opacity < 0.5 ? 'none' : 'block';
+    }, 500);
+}
+
 function applyPatches() {
     if (!window._yttv) return setTimeout(applyPatches, 250);
     if (!document.querySelector('video')) return setTimeout(applyPatches, 250);

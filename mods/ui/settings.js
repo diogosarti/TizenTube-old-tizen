@@ -17,10 +17,27 @@ export default function modernUI(update, parameters) {
             subtitle: tlsStatus,
             menuId: 'tt-tls-mode',
             menuHeader: { title: t('legacyNetwork.title'), subtitle: tlsStatus + ' · ' + t('legacyNetwork.scope') },
-            options: ['auto', '1.2', '1.3'].map(mode => ({
+            options: ['auto', '1.3', '1.2'].map(mode => ({
                 name: t('legacyNetwork.modes.' + mode.replace('.', '_')),
                 key: 'tlsMode', value: mode
             }))
+        } : null,
+        tls ? {
+            name: t('legacyNetwork.indicators'),
+            icon: 'SETTINGS',
+            value: null,
+            menuId: 'tt-player-indicators',
+            options: [
+                { name: t('legacyNetwork.showProtocol'), value: 'showPlayerProtocol' },
+                {
+                    name: t('legacyNetwork.showSponsorStatus'), value: null,
+                    menuId: 'tt-sponsor-status-display',
+                    options: ['never', 'unavailable', 'always'].map(value => ({
+                        name: t('legacyNetwork.statusDisplay.' + value),
+                        key: 'sponsorBlockStatusDisplay', value
+                    }))
+                }
+            ]
         } : null,
         {
             name: t('settings.options.socialMedia.title'),

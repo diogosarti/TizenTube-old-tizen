@@ -30,6 +30,41 @@ function setup(mode = 'auto') {
     return { win, transport, sent, log, message, close() { for (const t of timers) clearTimeout(t); } };
 }
 
+test('Player transport follows successful data for the current media and ignores stale and failed streams', () => {
+    const env = setup('1.3');
+    try {
+        function start(id, mime) {
+            const xhr = new env.win.XMLHttpRequest();
+            xhr.open('GET', 'https://media.googlevideo.com/videoplayback?id=' + id + '&mime=' + mime);
+            xhr.send(); return env.sent[env.sent.length - 1];
+        }
+        function response(request, tls, status) {
+            env.message({ type: 'tls', id: request.id, tls, verified: true });
+            env.message({ type: 'headers', id: request.id, status, headers: 'Content-Length: 1\r\n' });
+            env.message({ type: 'data', id: request.id, body: Uint8Array.from([1]).buffer });
+        }
+        const old = start('synthetic-old', 'video%2Fmp4');
+        assert.equal(old.mode, '1.3');
+        response(old, 'TLS 1.3', 200);
+        assert.equal(env.transport.summary().video, 'TLS 1.3');
+        env.transport.setMode('1.2');
+        const current = start('synthetic-current', 'video%2Fmp4');
+        assert.equal(current.mode, '1.2');
+        assert.equal(env.transport.summary().video, 'unknown');
+        response(old, 'TLSv1.2', 200);
+        assert.equal(env.transport.summary().video, 'unknown');
+        response(current, 'TLSv1.3', 206);
+        assert.equal(env.transport.summary().video, 'TLS 1.3');
+        const audio = start('synthetic-current', 'audio%2Fmp4');
+        response(audio, 'TLSv1.2', 200);
+        assert.equal(env.transport.summary().audio, 'TLS 1.2');
+        assert.equal(env.transport.summary().video, 'TLS 1.3');
+        const failed = start('synthetic-current', 'video%2Fmp4');
+        response(failed, 'TLSv1.2', 403);
+        assert.equal(env.transport.summary().video, 'TLS 1.3');
+    } finally { env.close(); }
+});
+
 test('NaCl XHR carries POST authorization and binary media, reports negotiated TLS separately, and never falls back on a TLS error', () => {
     const env = setup('1.3');
     try {
