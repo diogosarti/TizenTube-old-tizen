@@ -158,6 +158,18 @@ test('NaCl redirects keep forced mode, strip cross-host authorization, and an ab
 });
 
 test('Media and API keep reserved slots, API precedes telemetry, and abort releases its slot', async () => {
+    const historyEnv = setup();
+    try {
+        for (const endpoint of ['qoe', 'qoe', 'playback', 'watchtime']) {
+            const xhr = new historyEnv.win.XMLHttpRequest();
+            xhr.open('GET', 'https://www.youtube.com/api/stats/' + endpoint); xhr.send();
+        }
+        assert.deepEqual(historyEnv.sent.map(r => r.path), ['/api/stats/qoe', '/api/stats/playback', '/api/stats/watchtime'],
+            'A pending telemetry request must not block history; extra telemetry stays queued');
+        assert.equal(historyEnv.transport.summary().active, 3);
+        assert.equal(historyEnv.transport.summary().queued, 1);
+    } finally { historyEnv.close(); }
+
     const env = setup();
     try {
         const xhrs = [];

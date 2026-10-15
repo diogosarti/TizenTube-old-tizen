@@ -116,7 +116,8 @@
         function request(method, url, h, body, callback) {
             var u = resolve(root, url);
             var r = { id: ++sequence, method: method, url: url, parsed: u, headers: h, body: body, callback: callback, mode: mode, redirects: 0, retries: 0, group: category(u), queuedAt: Date.now(),
-                background: /(^|\.)youtube\.com$/i.test(u.hostname) && /^\/(api\/stats\/|ptracking(?:\?|$)|generate_204|youtubei\/v1\/log_event)/.test(u.pathname) };
+                background: /(^|\.)youtube\.com$/i.test(u.hostname) && /^\/(api\/stats\/|ptracking(?:\?|$)|generate_204|youtubei\/v1\/log_event)/.test(u.pathname) &&
+                    !/^\/api\/stats\/(playback|watchtime)$/.test(u.pathname) };
             var key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search);
             if (r.group === 'video' && u.pathname === '/videoplayback') {
                 r.mediaKey = key ? key[1] : mediaKey;

@@ -185,9 +185,9 @@ class SponsorBlockHandler {
 
     console.info(this.videoID, 'Video found, binding...');
 
-    this.video.addEventListener('play', this.scheduleSkipHandler);
-    this.video.addEventListener('pause', this.scheduleSkipHandler);
-    this.video.addEventListener('timeupdate', this.scheduleSkipHandler);
+    ['play', 'pause', 'playing', 'waiting', 'seeking', 'seeked', 'ratechange', 'timeupdate'].forEach(type => {
+      this.video.addEventListener(type, this.scheduleSkipHandler);
+    });
     this.video.addEventListener('durationchange', this.durationChangeHandler);
   }
 
@@ -297,8 +297,8 @@ class SponsorBlockHandler {
       return;
     }
 
-    if (this.video.paused) {
-      console.info(this.videoID, 'Currently paused, ignoring...');
+    if (this.video.paused || this.video.seeking || this.video.readyState < 3 || this.video.playbackRate <= 0) {
+      console.info(this.videoID, 'Playback is not advancing, ignoring...');
       return;
     }
 
@@ -328,8 +328,13 @@ class SponsorBlockHandler {
     );
 
     this.nextSkipTimeout = setTimeout(() => {
-      if (this.video.paused) {
-        console.info(this.videoID, 'Currently paused, ignoring...');
+      this.nextSkipTimeout = null;
+      if (!this.active || this.video.paused || this.video.seeking || this.video.readyState < 3 || this.video.playbackRate <= 0) {
+        return;
+      }
+      // Buffering and delayed callbacks can separate wall time from media time.
+      if (this.video.currentTime < start || this.video.currentTime >= end) {
+        this.scheduleSkip();
         return;
       }
       if (!this.skippableCategories.includes(segment.category)) {
@@ -379,7 +384,7 @@ class SponsorBlockHandler {
         } else this.video.currentTime = target;
         this.scheduleSkip();
       }
-    }, (start - this.video.currentTime) * 1000);
+    }, Math.max(0, (start - this.video.currentTime) * 1000 / this.video.playbackRate));
   }
 
   destroy() {
@@ -416,9 +421,9 @@ class SponsorBlockHandler {
     }
 
     if (this.video) {
-      this.video.removeEventListener('play', this.scheduleSkipHandler);
-      this.video.removeEventListener('pause', this.scheduleSkipHandler);
-      this.video.removeEventListener('timeupdate', this.scheduleSkipHandler);
+      ['play', 'pause', 'playing', 'waiting', 'seeking', 'seeked', 'ratechange', 'timeupdate'].forEach(type => {
+        this.video.removeEventListener(type, this.scheduleSkipHandler);
+      });
       this.video.removeEventListener(
         'durationchange',
         this.durationChangeHandler

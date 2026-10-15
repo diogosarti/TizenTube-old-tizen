@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## v2.3.16 (beta)
+
+- Fixed premature SponsorBlock skips during buffering and adjusted skip scheduling for playback speed changes.
+- Prevented pending telemetry requests from blocking playback and watch-history requests.
+- Fixed DeArrow title and thumbnail updates for both supported video card formats.
+
 ## v2.3.9
 
 - Added the actual googlevideo TLS protocol in the upper-right corner of the player controls, with an option to hide it.

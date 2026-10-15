@@ -94,6 +94,34 @@ test('Guide JSON hook accepts unrelated values and preserves unknown guide entri
     assert.equal(result.items[0].guideSectionRenderer.items.length,2);
 });
 
+test('DeArrow updates both video card formats, skips non-video cards and respects the disabled setting', async () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../mods/features/adblock.js'), 'utf8');
+    const requests = []; let enabled = true;
+    const deArrowify = vm.runInNewContext(source.slice(source.indexOf('function deArrowify('), source.indexOf('function hqify(')) + '\ndeArrowify;', {
+        configRead: () => enabled,
+        fetch(url) {
+            requests.push(url);
+            return Promise.resolve({ json: () => Promise.resolve({ titles: [{ title: 'Revised title', votes: 2 }], thumbnails: [{ timestamp: 15, votes: 3 }] }) });
+        }
+    });
+    const tile = { tileRenderer: { style: 'TILE_STYLE_YTLR_DEFAULT', contentId: 'synthetic-tile',
+        metadata: { tileMetadataRenderer: { title: { simpleText: 'Original' } } }, header: { tileHeaderRenderer: { thumbnail: { thumbnails: [] } } } } };
+    const lockup = { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: 'synthetic-lockup',
+        metadata: { lockupMetadataViewModel: { title: { content: 'Original' } } }, contentImage: { thumbnailViewModel: { image: { sources: [] } } } } };
+    const items = [{ adSlotRenderer: {} }, { adSlotRenderer: {} }, tile, lockup,
+        { tileRenderer: { style: 'TILE_STYLE_YTLR_CHANNEL' } }, { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST' } }];
+    deArrowify(items);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.length, 2);
+    assert.equal(items.length, 4, 'Consecutive ad slots must still be removed');
+    assert.equal(tile.tileRenderer.metadata.tileMetadataRenderer.title.simpleText, 'Revised title');
+    assert.equal(lockup.lockupViewModel.metadata.lockupMetadataViewModel.title.content, 'Revised title');
+    assert.match(tile.tileRenderer.header.tileHeaderRenderer.thumbnail.thumbnails[0].url, /videoID=synthetic-tile&time=15$/);
+    assert.match(lockup.lockupViewModel.contentImage.thumbnailViewModel.image.sources[0].url, /videoID=synthetic-lockup&time=15$/);
+    enabled = false; deArrowify(items);
+    assert.equal(requests.length, 2, 'Disabled DeArrow must not issue requests');
+});
+
 test('early module initialization handles fresh and malformed YouTube profiles', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/ui/disableWhosWatching.js'), 'utf8').replace(/^import[^\n]*\n/, '');
     const context = { localStorage: {}, configRead: () => false, configChangeEmitter: { addEventListener() {} } };
@@ -265,7 +293,7 @@ test('widget starts with mods and keeps baseline playback in diagnostics', () =>
 test('SponsorBlock initializes in a local document and treats missing segments as normal', async () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/features/sponsorblock.js'), 'utf8').replace(/^import[^\n]*\n/gm, '');
     const listeners = {};
-    const video = { duration: 10, currentTime: 0, paused: false, addEventListener() {}, removeEventListener() {} };
+    const video = { duration: 10, currentTime: 0, paused: false, readyState: 4, playbackRate: 1, addEventListener() {}, removeEventListener() {} };
     const timers = [];
     const seeks = [];
     const player = { seekTo: (target, allowSeekAhead) => seeks.push([target, allowSeekAhead]) };
@@ -316,9 +344,10 @@ test('SponsorBlock initializes in a local document and treats missing segments a
     assert.notEqual(overlay.style.values.display, 'none');
     assert.ok(container.children.includes(overlay));
     context.window.sponsorblock.scheduleSkip();
+    video.currentTime = 1;
     timers.pop()();
     assert.deepEqual(seeks, [[3, true]]);
-    assert.equal(video.currentTime, 0);
+    assert.equal(video.currentTime, 1);
     listeners.hashchange();
     assert.equal(requests.length, 1);
     location.hash = '#/watch?v=lmnopqrstuv';
