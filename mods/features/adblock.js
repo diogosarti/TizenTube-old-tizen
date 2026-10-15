@@ -346,7 +346,8 @@ for (const key in window._yttv) {
 
 
 function processShelves(shelves, shouldAddPreviews = true) {
-  for (const shelve of shelves) {
+  for (let shelfIndex = 0; shelfIndex < shelves.length; shelfIndex++) {
+    const shelve = shelves[shelfIndex];
     if (shelve.shelfRenderer) {
       if (!shelve.shelfRenderer.tvhtml5Style) shelve.shelfRenderer.tvhtml5Style = { effects: {} };
       if (configRead('disableEnlargingThumbnails')) shelve.shelfRenderer.tvhtml5Style.effects.enlarge = false;
@@ -361,7 +362,7 @@ function processShelves(shelves, shouldAddPreviews = true) {
       shelve.shelfRenderer.content.horizontalListRenderer.items = hideVideo(shelve.shelfRenderer.content.horizontalListRenderer.items);
       if (!configRead('enableShorts')) {
         if (shelve.shelfRenderer.tvhtml5ShelfRendererType === 'TVHTML5_SHELF_RENDERER_TYPE_SHORTS') {
-          shelves.splice(shelves.indexOf(shelve), 1);
+          shelves.splice(shelfIndex--, 1);
           continue;
         }
         shelve.shelfRenderer.content.horizontalListRenderer.items = shelve.shelfRenderer.content.horizontalListRenderer.items.filter(item => item.tileRenderer?.tvhtml5ShelfRendererType !== 'TVHTML5_TILE_RENDERER_TYPE_SHORTS');
@@ -378,7 +379,7 @@ function addPreviews(items) {
   for (const item of items) {
     if (item.tileRenderer) {
       const watchEndpoint = item.tileRenderer.onSelectCommand;
-      const copiedEndpoint = JSON.parse(JSON.stringify(watchEndpoint));
+      const copiedEndpoint = watchEndpoint;
       if (item.tileRenderer?.onFocusCommand?.playbackEndpoint) continue;
       if (item.tileRenderer?.onFocusCommand?.commandExecutorCommand) continue;
       item.tileRenderer.onFocusCommand = {
@@ -398,10 +399,10 @@ function addPreviews(items) {
 }
 
 function deArrowify(items) {
-  for (const item of items) {
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+    const item = items[itemIndex];
     if (item.adSlotRenderer) {
-      const index = items.indexOf(item);
-      items.splice(index, 1);
+      items.splice(itemIndex--, 1);
       continue;
     }
     if (!item.tileRenderer && item.lockupViewModel) continue;

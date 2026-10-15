@@ -62,6 +62,8 @@ class SponsorBlockHandler {
   attachVideoTimeout = null;
   nextSkipTimeout = null;
   sliderInterval = null;
+  buildOverlayTimeout = null;
+  positionOverlayHandler = null;
 
   observer = null;
   scheduleSkipHandler = null;
@@ -132,15 +134,9 @@ class SponsorBlockHandler {
     this.manualSkippableCategories = configRead('sponsorBlockManualSkips');
     this.skippableCategories = this.getSkippableCategories();
 
-    this.scheduleSkipHandler = () => {
-      const slider = document.querySelector('div[idomkey="slider"]');
-      const sliderRect = slider?.getBoundingClientRect();
-      const isOldUI = !document.querySelector('div[idomkey="Metadata-Section"]');
-      if (isOldUI && sliderRect && this.segmentsoverlay) {
-        this.segmentsoverlay.style.setProperty('top', `${sliderRect.top}px`, 'important');
-      }
-      this.scheduleSkip();
-    }
+    this.scheduleSkipHandler = () => this.scheduleSkip();
+    this.positionOverlayHandler = () => this.positionOverlay();
+    window.addEventListener('resize', this.positionOverlayHandler);
     this.durationChangeHandler = () => this.buildOverlay();
 
     this.attachVideo();
@@ -196,6 +192,7 @@ class SponsorBlockHandler {
   }
 
   buildOverlay() {
+    if (!this.active || this.buildOverlayTimeout) return;
     if (this.segmentsoverlay) {
       console.info('Overlay already built');
       return;
@@ -208,7 +205,13 @@ class SponsorBlockHandler {
 
     const videoDuration = this.video.duration;
     const slider = document.querySelector('div[idomkey="slider"]');
-    if (!slider) return setTimeout(() => this.buildOverlay(), 100);
+    if (!slider) {
+      this.buildOverlayTimeout = setTimeout(() => {
+        this.buildOverlayTimeout = null;
+        this.buildOverlay();
+      }, 500);
+      return;
+    }
 
     this.segmentsoverlay = document.createElement('div');
 
@@ -258,6 +261,7 @@ class SponsorBlockHandler {
         }
 
       });
+      this.positionOverlay();
     });
 
     this.sliderInterval = setInterval(() => {
@@ -270,8 +274,18 @@ class SponsorBlockHandler {
           subtree: true
         });
         this.slider.appendChild(this.segmentsoverlay);
+        this.positionOverlay();
       }
     }, 500);
+  }
+
+  positionOverlay() {
+    if (!this.active || !this.segmentsoverlay) return;
+    const slider = document.querySelector('div[idomkey="slider"]');
+    if (slider && !document.querySelector('div[idomkey="Metadata-Section"]')) {
+      const top = `${slider.getBoundingClientRect().top}px`;
+      if (this.segmentsoverlay.style.top !== top) this.segmentsoverlay.style.setProperty('top', top, 'important');
+    }
   }
 
   scheduleSkip() {
@@ -378,6 +392,9 @@ class SponsorBlockHandler {
       this.nextSkipTimeout = null;
     }
 
+    clearTimeout(this.buildOverlayTimeout);
+    this.buildOverlayTimeout = null;
+    if (this.positionOverlayHandler) window.removeEventListener('resize', this.positionOverlayHandler);
     if (this.attachVideoTimeout) {
       clearTimeout(this.attachVideoTimeout);
       this.attachVideoTimeout = null;

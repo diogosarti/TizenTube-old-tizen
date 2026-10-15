@@ -40,7 +40,8 @@
         function updateStatus() {
             if (video && /^https?:/i.test(video.currentSrc || '') && parent.__legacyTLS) parent.__legacyTLS.system('video');
             var text = mediaStatus;
-            if (!text) {
+            var playing = video && !video.paused && !video.seeking && video.readyState >= 3;
+            if (!text && !playing) {
                 var spinners = document.querySelectorAll('yt-spinner');
                 for (var i = 0; i < spinners.length; i++) {
                     var element = spinners[i], rect = element.getBoundingClientRect();

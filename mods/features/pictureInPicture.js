@@ -59,6 +59,7 @@ function enablePip() {
                         videoElement.style.left = '68vw';
 
                         window.isPipPlaying = true;
+                        observerPipEnter.observe(document.body, { childList: true, subtree: true });
                         videoElement.removeEventListener('play', onPipEnter);
                     }
 
@@ -94,6 +95,7 @@ function pipToFullscreen() {
     };
     resolveCommand(command);
     window.isPipPlaying = false;
+    observerPipEnter.disconnect();
 };
 
 const originalClasses = {
@@ -108,7 +110,7 @@ const originalClasses = {
 }
 
 const observerPipEnter = new MutationObserver(() => {
-    if (!window.isPipPlaying) return;
+    if (!window.isPipPlaying) { observerPipEnter.disconnect(); return; }
     const searchBar = document.querySelector('ytlr-search-bar');
     if (searchBar) {
         const pipButtonExists = document.querySelector('#tt-pip-button');
@@ -190,7 +192,6 @@ const observerPipEnter = new MutationObserver(() => {
     }
 });
 
-observerPipEnter.observe(document.body, { childList: true, subtree: true });
 
 export {
     enablePip,

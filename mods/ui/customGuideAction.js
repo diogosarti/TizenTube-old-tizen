@@ -5,6 +5,7 @@ import { GuideEntryRenderer } from "./ytUI.js";
 const origParse = JSON.parse;
 JSON.parse = function () {
     const r = origParse.apply(this, arguments);
+    if (!r || typeof r !== 'object' || !Array.isArray(r.items) || !r.items.length || !Array.isArray(r.items[0]?.guideSectionRenderer?.items)) return r;
     const guideSection = r.items?.[0]?.guideSectionRenderer;
     const order = configRead('sidebarContentsOrder');
     if (guideSection && Array.isArray(order)) {
@@ -90,6 +91,7 @@ JSON.parse = function () {
     if (r.items && Array.isArray(r.items) && r.items[0].guideSectionRenderer) {
         for (let i = 0; i < r.items.length; i++) {
             const section = r.items[i].guideSectionRenderer;
+            if (!section || !Array.isArray(section.items)) continue;
             section.originalItems = section.items.slice();
             for (let j = 0; j < section.items.length; j++) {
                 const item = section.items[j].guideEntryRenderer;

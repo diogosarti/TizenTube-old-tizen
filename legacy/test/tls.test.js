@@ -38,8 +38,8 @@ test('Player transport follows successful data for the current media and ignores
             xhr.open('GET', 'https://media.googlevideo.com/videoplayback?id=' + id + '&mime=' + mime);
             xhr.send(); return env.sent[env.sent.length - 1];
         }
-        function response(request, tls, status) {
-            env.message({ type: 'tls', id: request.id, tls, verified: true });
+        function response(request, tls, status, cipher = 'TLS1-3-CHACHA20-POLY1305-SHA256') {
+            env.message({ type: 'tls', id: request.id, tls, cipher, verified: true });
             env.message({ type: 'headers', id: request.id, status, headers: 'Content-Length: 1\r\n' });
             env.message({ type: 'data', id: request.id, body: Uint8Array.from([1]).buffer });
         }
@@ -47,17 +47,21 @@ test('Player transport follows successful data for the current media and ignores
         assert.equal(old.mode, '1.3');
         response(old, 'TLS 1.3', 200);
         assert.equal(env.transport.summary().video, 'TLS 1.3');
+        assert.equal(env.transport.summary().videoCipher, 'TLS1-3-CHACHA20-POLY1305-SHA256');
         env.transport.setMode('1.2');
         const current = start('synthetic-current', 'video%2Fmp4');
         assert.equal(current.mode, '1.2');
         assert.equal(env.transport.summary().video, 'unknown');
+        assert.equal(env.transport.summary().videoCipher, 'unknown');
         response(old, 'TLSv1.2', 200);
         assert.equal(env.transport.summary().video, 'unknown');
         response(current, 'TLSv1.3', 206);
         assert.equal(env.transport.summary().video, 'TLS 1.3');
         const audio = start('synthetic-current', 'audio%2Fmp4');
-        response(audio, 'TLSv1.2', 200);
+        response(audio, 'TLSv1.2', 200, 'TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256');
         assert.equal(env.transport.summary().audio, 'TLS 1.2');
+        assert.equal(env.transport.summary().audioCipher, 'TLS-ECDHE-ECDSA-WITH-AES-128-GCM-SHA256');
+        assert.equal(env.transport.summary().videoCipher, 'TLS1-3-CHACHA20-POLY1305-SHA256');
         assert.equal(env.transport.summary().video, 'TLS 1.3');
         const failed = start('synthetic-current', 'video%2Fmp4');
         response(failed, 'TLSv1.2', 403);
@@ -150,5 +154,61 @@ test('NaCl redirects keep forced mode, strip cross-host authorization, and an ab
         assert.equal(Buffer.from(retry.body).toString(), 'synthetic'); assert.equal(failed, 0);
         env.message({ type: 'error', id: retry.id, error: 'TCP read: -2', retryable: true });
         assert.equal(failed, 1, 'A second reset must finish with an error');
+    } finally { env.close(); }
+});
+
+test('Media and API keep reserved slots, API precedes telemetry, and abort releases its slot', async () => {
+    const env = setup();
+    try {
+        const xhrs = [];
+        function start(url) { const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', url); xhr.send(); xhrs.push(xhr); }
+        for (let i = 0; i < 5; i++) start('https://www.youtube.com/youtubei/v1/browse?synthetic=' + i);
+        assert.equal(env.sent.length, 4);
+        start('https://www.youtube.com/api/stats/watchtime');
+        start('https://media.googlevideo.com/videoplayback?id=synthetic');
+        assert.equal(env.sent.length, 5, 'Media must start despite waiting API and telemetry');
+        xhrs[0].abort();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const dispatched = env.sent.filter(r => r.type === 'request');
+        assert.equal(dispatched[5].path, '/youtubei/v1/browse?synthetic=4');
+        env.message({type:'done', id:dispatched[1].id});
+        await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(env.sent.filter(r => r.type === 'request')[6].path, '/api/stats/watchtime', 'History traffic must still run');
+    } finally { env.close(); }
+
+    const mediaEnv = setup();
+    try {
+        function start(url) { const xhr = new mediaEnv.win.XMLHttpRequest(); xhr.open('GET', url); xhr.send(); }
+        for (let i = 0; i < 6; i++) start('https://media.googlevideo.com/videoplayback?id=synthetic&part=' + i);
+        assert.equal(mediaEnv.sent.length, 4, 'Media must leave two slots available for API/history');
+        start('https://www.youtube.com/youtubei/v1/player');
+        start('https://www.youtube.com/api/stats/watchtime');
+        assert.equal(mediaEnv.sent[4].path, '/youtubei/v1/player');
+        assert.equal(mediaEnv.sent[5].path, '/api/stats/watchtime');
+        assert.equal(mediaEnv.transport.summary().active, 6);
+        mediaEnv.message({ type: 'done', id: mediaEnv.sent[0].id });
+        await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(mediaEnv.sent[6].path, '/videoplayback?id=synthetic&part=4', 'Queued media must resume when a media slot is released');
+        assert.equal(mediaEnv.transport.summary().active, 6);
+        assert.equal(mediaEnv.transport.summary().queued, 1);
+    } finally { mediaEnv.close(); }
+});
+
+test('Cached JSON response keeps identity and reopening discards the old response', () => {
+    const env = setup();
+    try {
+        const xhr = new env.win.XMLHttpRequest();
+        function reply(value) {
+            const id = env.sent.filter(r => r.type === 'request').at(-1).id;
+            const data = Buffer.from(JSON.stringify(value));
+            env.message({type:'headers',id,status:200,headers:'Content-Type: application/json\r\n'});
+            env.message({type:'data',id,body:data.buffer.slice(data.byteOffset,data.byteOffset+data.length)});
+            env.message({type:'done',id});
+        }
+        xhr.open('GET','https://www.youtube.com/synthetic'); xhr.responseType = 'json'; xhr.send(); reply({message:'Привет'});
+        const first = xhr.response;
+        assert.equal(first.message,'Привет'); assert.equal(xhr.response,first);
+        xhr.open('GET','https://www.youtube.com/synthetic2'); xhr.send(); reply({message:'second'});
+        assert.equal(xhr.response.message,'second'); assert.notEqual(xhr.response,first);
     } finally { env.close(); }
 });

@@ -1,6 +1,6 @@
 {
   "name": "tizentube-old-tizen",
-  "version": "2.3.9",
+  "version": "2.3.15",
   "private": true,
   "description": "Standalone YouTube with SponsorBlock for older Samsung TVs; tested on KU6000 / Tizen 2.4.0.",
   "scripts": {

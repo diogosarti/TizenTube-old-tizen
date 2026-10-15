@@ -60,12 +60,16 @@
     function create(container, log, changed) {
         var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = 'auto';
         var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 };
-        var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], mediaKey = '', media = { video: 'unknown', audio: 'unknown' };
+        var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], mediaKey = '', media = { video: 'unknown', audio: 'unknown' }, ciphers = { api: 'unknown', video: 'unknown', audio: 'unknown' }, lastNotice = '';
         try { mode = validMode(JSON.parse(root.localStorage.getItem(CONFIG_KEY) || '{}').tlsMode); } catch (_) {}
-        function notify() { if (changed) changed(summary()); }
+        function notify() {
+            var key = [mode, last.api, last.video, media.audio, ciphers.api, ciphers.video, ciphers.audio, ready, failed].join('|');
+            if (changed && key !== lastNotice) { lastNotice = key; changed(summary()); }
+        }
         function summary() {
             return { mode: mode, api: last.api, video: last.video, system: 'unknown', active: active, queued: queue.length,
-                audio: media.audio, completed: stats.completed, bytes: stats.bytes, errors: stats.errors, ready: ready, failed: failed };
+                audio: media.audio, apiCipher: ciphers.api, videoCipher: ciphers.video, audioCipher: ciphers.audio,
+                completed: stats.completed, bytes: stats.bytes, errors: stats.errors, ready: ready, failed: failed };
         }
         function record(group, tls) {
             last[group] = tls;
@@ -74,14 +78,24 @@
         function pump() {
             if (!ready || failed) return;
             while (active < 6 && queue.length) {
-                var r = queue.shift(); if (!requests[r.id]) continue;
+                var busy = Object.keys(requests).map(function (id) { return requests[id]; }).filter(function (r) { return r.active; });
+                var other = busy.filter(function (r) { return r.group !== 'video'; }).length;
+                var mediaActive = active - other;
+                var background = busy.filter(function (r) { return r.background; }).length;
+                var index = -1;
+                for (var i = 0; mediaActive < 4 && i < queue.length; i++) if (queue[i].group === 'video') { index = i; break; }
+                if (index < 0 && other < 4) for (i = 0; i < queue.length; i++) if (queue[i].group !== 'video' && !queue[i].background) { index = i; break; }
+                if (index < 0 && other < 4 && background < 1) for (i = 0; i < queue.length; i++) if (queue[i].group !== 'video' && queue[i].background) { index = i; break; }
+                if (index < 0) break;
+                var r = queue.splice(index, 1)[0]; if (!requests[r.id]) continue;
                 active++; r.active = true;
-                var u = resolve(root, r.url), lines = '', h = r.headers;
+                var u = r.parsed, lines = '', h = r.headers;
+                log.record('tls.queue', r.group + '; waitMs=' + (Date.now() - r.queuedAt));
                 for (var key in h) if (Object.prototype.hasOwnProperty.call(h, key)) lines += key + ': ' + h[key] + '\r\n';
                 if (!h['user-agent']) lines += 'User-Agent: ' + root.navigator.userAgent + '\r\n';
                 module.postMessage({ type: 'request', id: r.id, method: r.method, host: u.hostname,
                     port: +(u.port || 443), path: (u.pathname.charAt(0) === '/' ? u.pathname : '/' + u.pathname) + u.search,
-                    headers: lines, body: r.body, mode: r.mode });
+                    headers: lines, body: r.body, mode: r.mode, freshConnection: r.retries > 0 });
             }
             notify();
         }
@@ -97,15 +111,17 @@
         }
         function requeue(r) {
             delete requests[r.id]; active--; r.active = false;
-            r.id = ++sequence; requests[r.id] = r; queue.push(r); setTimeout(pump, 0);
+            r.id = ++sequence; r.queuedAt = Date.now(); r.mediaRecorded = false; requests[r.id] = r; queue.push(r); setTimeout(pump, 0);
         }
         function request(method, url, h, body, callback) {
-            var r = { id: ++sequence, method: method, url: url, headers: h, body: body, callback: callback, mode: mode, redirects: 0, retries: 0, group: category(resolve(root, url)) };
-            var u = resolve(root, url), key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search);
+            var u = resolve(root, url);
+            var r = { id: ++sequence, method: method, url: url, parsed: u, headers: h, body: body, callback: callback, mode: mode, redirects: 0, retries: 0, group: category(u), queuedAt: Date.now(),
+                background: /(^|\.)youtube\.com$/i.test(u.hostname) && /^\/(api\/stats\/|ptracking(?:\?|$)|generate_204|youtubei\/v1\/log_event)/.test(u.pathname) };
+            var key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search);
             if (r.group === 'video' && u.pathname === '/videoplayback') {
                 r.mediaKey = key ? key[1] : mediaKey;
                 r.mediaKind = mime && /^audio(?:%2f|\/)/i.test(mime[1]) ? 'audio' : 'video';
-                if (r.mediaKey !== mediaKey) { mediaKey = r.mediaKey; media = { video: 'unknown', audio: 'unknown' }; last.video = 'unknown'; notify(); }
+                if (r.mediaKey !== mediaKey) { mediaKey = r.mediaKey; media = { video: 'unknown', audio: 'unknown' }; last.video = 'unknown'; ciphers.video = ciphers.audio = 'unknown'; notify(); }
             }
             requests[r.id] = r; queue.push(r);
             if (failed) setTimeout(function () { remove(r); callback({ type: 'error', error: 'NaCl transport unavailable' }); }, 0);
@@ -131,8 +147,10 @@
             if (m.type === 'tls') {
                 if (!m.verified) { var rejected = r.callback; abort(r); rejected({ type: 'error', error: 'Certificate verification failed' }); return; }
                 r.transport = m.tls.replace('TLSv', 'TLS ');
+                r.cipher = m.cipher || 'unknown';
+                if (r.group === 'api') ciphers.api = r.cipher;
                 if (r.group !== 'video') record(r.group, r.transport);
-                log.record('tls.connection', r.group + '; ' + m.tls + '; verified=true; mode=' + r.mode);
+                log.record('tls.connection', r.group + '; ' + m.tls + '; cipher=' + r.cipher + '; verified=true; mode=' + r.mode + '; reused=' + !!m.reused + '; handshakeMs=' + Math.round(m.handshakeMs || 0));
             } else if (m.type === 'headers') {
                 var h = headers(m.headers), redirect = h.location && [301, 302, 303, 307, 308].indexOf(m.status) >= 0;
                 if (redirect) {
@@ -142,18 +160,18 @@
                         var cb = r.callback; abort(r); cb({ type: 'error', error: 'Unsafe or excessive redirect' }); return;
                     }
                     module.postMessage({ type: 'abort', id: r.id });
-                    if (next.host !== resolve(root, r.url).host) { delete r.headers.authorization; delete r.headers.cookie; }
+                    if (next.host !== r.parsed.host) { delete r.headers.authorization; delete r.headers.cookie; }
                     if ((m.status === 303 && r.method !== 'HEAD') || ((m.status === 301 || m.status === 302) && r.method === 'POST')) {
                         r.method = 'GET'; r.body = new root.ArrayBuffer(0); delete r.headers['content-type'];
                     }
-                    r.url = next.href; requeue(r); return;
+                    r.url = next.href; r.parsed = next; r.group = category(next); requeue(r); return;
                 }
                 m.headers = h; m.url = r.url;
                 r.mediaSuccess = m.status === 200 || m.status === 206;
                 if (/^audio\//i.test(h['content-type'] || '')) r.mediaKind = 'audio';
             } else if (m.type === 'done' || m.type === 'error') {
                 if (m.type === 'error' && m.retryable && r.retries++ < 1) {
-                    log.record('tls.retry', r.group + '; reset before HTTP; mode=' + r.mode);
+                    log.record('tls.retry', r.group + '; safe fresh connection retry; mode=' + r.mode);
                     requeue(r); return;
                 }
                 remove(r);
@@ -164,7 +182,8 @@
                 stats.bytes += m.body.byteLength;
                 if (r.mediaKind && r.mediaSuccess && r.mediaKey === mediaKey && r.transport) {
                     media[r.mediaKind] = r.transport;
-                    if (r.mediaKind === 'video') record('video', r.transport);
+                    ciphers[r.mediaKind] = r.cipher;
+                    if (r.mediaKind === 'video' && !r.mediaRecorded) { r.mediaRecorded = true; record('video', r.transport); }
                     else notify();
                 }
             }
@@ -182,7 +201,7 @@
                 // Already-open connections retain their negotiated version until playback/reload creates new ones.
                 notify(); log.record('tls.mode', mode);
             },
-            system: function (group) { if (group === 'video' && last.video !== 'unknown') { last.video = 'unknown'; media = { video: 'unknown', audio: 'unknown' }; notify(); } },
+            system: function (group) { if (group === 'video' && last.video !== 'unknown') { last.video = 'unknown'; media = { video: 'unknown', audio: 'unknown' }; ciphers.video = ciphers.audio = 'unknown'; notify(); } },
             inspect: function () { module.postMessage({ type: 'inspect' }); return diagnostics; },
             install: function (win) { install(win, api); }
         };
@@ -205,7 +224,7 @@
             this._native = null; this._request = null; this._state = 0; this._status = 0; this._statusText = ''; this._url = '';
             this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._length = 0; this._body = null;
             this.timeout = 0; this.withCredentials = false; this.responseType = ''; this._sent = false;
-            this._generation = 0;
+            this._generation = 0; this._text = null; this._textLength = -1; this._jsonReady = false;
         }
         function state(xhr, value) { xhr._state = value; xhr._event('readystatechange'); }
         function untrack(xhr) { clearTimeout(xhr._timer); live = live.filter(function (item) { return item !== xhr; }); xhr._request = null; xhr._sent = false; }
@@ -213,6 +232,7 @@
             var generation = xhr._generation;
             transport.abort(xhr._request); untrack(xhr); xhr._chunks = []; xhr._body = null; xhr._length = 0;
             xhr._status = 0; xhr._statusText = ''; xhr._responseHeaders = {}; xhr._url = '';
+            xhr._text = null; xhr._textLength = -1; xhr._jsonReady = false;
             state(xhr, 4);
             if (xhr._generation !== generation) return;
             xhr._event(type);
@@ -221,6 +241,7 @@
         XHR.prototype.open = function (method, url, async, user, password) {
             this.abort(); this._method = String(method).toUpperCase(); this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._length = 0; this._body = null;
             this._generation++;
+            this._text = null; this._textLength = -1; this._jsonReady = false; this._json = null;
             this._status = 0; this._statusText = ''; this._url = ''; this._native = null;
             var u = resolve(win, url);
             this._target = u.href;
@@ -291,14 +312,20 @@
             });
         };
         function buffer(xhr) { return xhr._body || combine(xhr._chunks, xhr._length); }
+        function decoded(xhr) {
+            if (xhr._text === null || xhr._textLength !== xhr._length) {
+                xhr._text = text(buffer(xhr)); xhr._textLength = xhr._length;
+            }
+            return xhr._text;
+        }
         function responseText(xhr) {
             if (xhr.responseType && xhr.responseType !== 'text') throw new Error('InvalidStateError');
-            return xhr._state < 3 ? '' : text(buffer(xhr));
+            return xhr._state < 3 ? '' : decoded(xhr);
         }
         function responseXML(xhr) {
             if (xhr._state !== 4 || !xhr._body) return null;
             var mime = xhr._mime || xhr._responseHeaders['content-type'] || 'text/xml';
-            return new win.DOMParser().parseFromString(text(xhr._body), mime.indexOf('text/html') === 0 ? 'text/html' : 'text/xml');
+            return new win.DOMParser().parseFromString(decoded(xhr), mime.indexOf('text/html') === 0 ? 'text/html' : 'text/xml');
         }
         var getters = {
             readyState: function () { return this._state; }, status: function () { return this._status; }, statusText: function () { return this._statusText; },
@@ -309,7 +336,11 @@
                 if (this.responseType === 'arraybuffer') return this._body;
                 if (this.responseType === 'blob') return new win.Blob([this._body], { type: this._mime || this._responseHeaders['content-type'] || '' });
                 if (this.responseType === 'document') return responseXML(this);
-                try { return JSON.parse(text(this._body)); } catch (_) { return null; }
+                if (!this._jsonReady) {
+                    try { this._json = JSON.parse(decoded(this)); } catch (_) { this._json = null; }
+                    this._jsonReady = true;
+                }
+                return this._json;
             }
         };
         Object.keys(getters).forEach(function (key) { Object.defineProperty(XHR.prototype, key, { get: function () { return this._native ? this._native[key] : getters[key].call(this); } }); });

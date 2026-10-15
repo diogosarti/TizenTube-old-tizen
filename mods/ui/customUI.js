@@ -35,16 +35,24 @@ if (window.__legacyDirect && parent.__legacyTLS) {
         if (display === 'always' || (display === 'unavailable' && availability === 'unavailable')) {
             lines.push(t('legacyNetwork.sponsorStatus.' + availability));
         }
-        badge.textContent = lines.join('\n');
+        const text = lines.join('\n');
+        if (badge.textContent !== text) badge.textContent = text;
         const style = window.getComputedStyle(controls);
-        badge.style.display = !lines.length || controls.classList.contains('zylon-hidden') || style.display === 'none' ||
+        const displayStyle = !lines.length || controls.classList.contains('zylon-hidden') || style.display === 'none' ||
             style.visibility === 'hidden' || +style.opacity < 0.5 ? 'none' : 'block';
+        if (badge.style.display !== displayStyle) badge.style.display = displayStyle;
     }, 500);
 }
 
+let patchAttempts = 0;
+let playerPatched = false;
 function applyPatches() {
+    if (playerPatched) return;
+    if (++patchAttempts > 240) {
+        if (window.__legacyLog) window.__legacyLog.record('player.patch', 'Player controls pattern unavailable');
+        return;
+    }
     if (!window._yttv) return setTimeout(applyPatches, 250);
-    if (!document.querySelector('video')) return setTimeout(applyPatches, 250);
     const methods = Object.keys(window._yttv).filter(key => {
         return typeof window._yttv[key] === 'function' && window._yttv[key].toString().includes('TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION');
     });
@@ -55,33 +63,30 @@ function applyPatches() {
     }
 
     const origMethod = window._yttv[methods[0]];
+    const source = origMethod.toString();
+    let functions;
+    try { functions = extractAssignedFunctions(source); }
+    catch (_) {
+        if (window.__legacyLog) window.__legacyLog.record('player.patch', 'Player controls source unsupported');
+        return;
+    }
+    function member(match) {
+        const fn = functions.find(match);
+        return fn && fn.left ? fn.left.split('.')[1] : null;
+    }
+    const settingActionGroup = member(func => func.rhs.includes('TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS') && /return\s+function\b/.test(func.rhs));
+    const previousButtonName = member(func => func.rhs.includes('skipNextButton') && func.rhs.indexOf('skipPreviousButton') > func.rhs.indexOf('skipNextButton'));
+    const nextButtonName = member(func => func.rhs.includes('skipPreviousButton') && func.rhs.indexOf('skipNextButton') > func.rhs.indexOf('skipPreviousButton'));
+    const engagementActionButton = member(func => func.rhs.includes('props.data.engagementActions'));
+    const mountMethod = Object.getOwnPropertyNames(origMethod.prototype).find(name => {
+        const method = Object.getOwnPropertyDescriptor(origMethod.prototype, name).value;
+        return typeof method === 'function' && /this\.on\(["']keydown["']/.test(method.toString());
+    });
+    if (!settingActionGroup || !engagementActionButton || !mountMethod) return;
 
-    function YtlrPlayerActionsContainer() {
-        const args = Array.prototype.slice.call(arguments);
-        const isClass = /^class\s/.test(origMethod.toString());
-
-        function constructAsNew(ctor, argsList) {
-            if (typeof Reflect !== 'undefined' && typeof Reflect.construct === 'function') {
-                return Reflect.construct(ctor, argsList, YtlrPlayerActionsContainer);
-            }
-            return new origMethod(...argsList);
-        }
-
-        if (!(this instanceof YtlrPlayerActionsContainer)) {
-            if (isClass) return constructAsNew(origMethod, args);
-            return origMethod.apply(this, args);
-        }
-
-        let inst;
-        if (isClass) {
-            inst = constructAsNew(origMethod, args);
-        } else {
-            origMethod.apply(this, args);
-            inst = this;
-        }
-
-        const functions = extractAssignedFunctions(origMethod.toString());
-
+    function patchPlayerActions(inst) {
+        if (inst.__ttPlayerActionsPatched) return inst;
+        inst.__ttPlayerActionsPatched = true;
         const pipCommand = {
             "type": "TRANSPORT_CONTROLS_BUTTON_TYPE_PIP",
             "button": {
@@ -98,11 +103,6 @@ function applyPatches() {
             }
         }
 
-        const settingActionGroup = functions.find(func => {
-            return func.rhs.includes('TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS');
-        }).left.split('.')[1];
-
-        if (!settingActionGroup) return inst;
 
         const origSettingActionGroup = inst[settingActionGroup];
         if (configRead('enableMPButton')) {
@@ -113,28 +113,6 @@ function applyPatches() {
                 return res;
             };
         }
-
-        const previousButtonName = functions.find(func => {
-            if (func.rhs.includes('skipNextButton')) {
-                const skipNextButtonIndex = func.rhs.indexOf('skipNextButton');
-                const skipPreviousButtonIndex = func.rhs.indexOf('skipPreviousButton');
-                if (skipPreviousButtonIndex > skipNextButtonIndex) {
-                    return true;
-                }
-            }
-        }).left.split('.')[1];
-
-        const nextButtonName = functions.find(func => {
-            if (func.rhs.includes('skipPreviousButton')) {
-                const skipNextButtonIndex = func.rhs.indexOf('skipNextButton');
-                const skipPreviousButtonIndex = func.rhs.indexOf('skipPreviousButton');
-                if (skipNextButtonIndex > skipPreviousButtonIndex) {
-                    return true;
-                }
-            }
-        }).left.split('.')[1];
-
-        const engagementActionButton = functions.find(func => func.rhs.includes('props.data.engagementActions')).left.split('.')[1];
 
         if (engagementActionButton && configRead('enableSpeedControlsButton')) {
             const origEngagementActionButton = inst[engagementActionButton];
@@ -214,8 +192,18 @@ function applyPatches() {
     }
 
     if (configRead('enablePatchingVideoPlayer')) {
-        YtlrPlayerActionsContainer.prototype = origMethod.prototype;
-        window._yttv[methods[0]] = YtlrPlayerActionsContainer;
+        // Keep YouTube's constructor identity so it can reuse and dispose its component.
+        const origMount = origMethod.prototype[mountMethod];
+        origMethod.prototype[mountMethod] = function () {
+            patchPlayerActions(this);
+            return origMount.apply(this, arguments);
+        };
+        playerPatched = true;
+        // A lazy-loaded constructor may already have mounted before the pattern was found.
+        Array.prototype.forEach.call(document.querySelectorAll('ytlr-player-actions-container'), element => {
+            const inst = element.__instance;
+            if (inst instanceof origMethod) patchPlayerActions(inst);
+        });
     }
 }
 

@@ -10,6 +10,90 @@ const Logger = require('../web/logger');
 const proxy = require('../proxy');
 const { createServer } = require('../service');
 
+test('Seek preview uses HTTPS without mutating shared frames and shows signed time from the seek origin', () => {
+    const frame = { url: 'file://i.ytimg.com/sb/synthetic/storyboard.jpg', width: 100, height: 50 };
+    function Storyboard() { this.props = { seekTime: 90 }; }
+    Storyboard.prototype.getStoryboardFrame = function () { const position = this.props.seekTime; return frame; };
+    Object.defineProperty(Storyboard.prototype, 'timeLabel', { configurable: true, get() {
+        return Math.floor(this.props.seekTime / 60) + ':' + String(this.props.seekTime % 60).padStart(2, '0');
+    } });
+    const instance = new Storyboard(), video = { currentTime: 80 };
+    const thumb = { style: { backgroundImage: 'url("' + frame.url + '")' } }, label = {};
+    const element = { __instance: instance, querySelector: selector => selector.includes('storyboard-thumb') ? thumb : label };
+    const source = fs.readFileSync(path.resolve(__dirname, '../../mods/ui/seekPreview.js'), 'utf8');
+    vm.runInNewContext(source, { window: { __legacyDirect: true },
+        document: { readyState: 'complete', querySelector: selector => selector === 'video' ? video : element } });
+    assert.equal(instance.getStoryboardFrame().url, 'https://i.ytimg.com/sb/synthetic/storyboard.jpg');
+    assert.equal(frame.url, 'file://i.ytimg.com/sb/synthetic/storyboard.jpg');
+    assert.equal(label.textContent, '1:30 (+0:10)');
+    assert.match(thumb.style.backgroundImage, /^url\("https:/);
+    instance.props.seekTime = 65;
+    assert.equal(instance.timeLabel, '1:05 (\u22120:15)');
+    video.currentTime = 90; instance.props.seekTime = 170;
+    assert.equal(instance.timeLabel, '2:50 (+1:20)', 'A new seek uses the newly committed playback position');
+    frame.url = 'https://i.ytimg.com/sb/synthetic/storyboard.jpg';
+    assert.equal(instance.getStoryboardFrame(), frame, 'An HTTPS frame is already valid');
+});
+
+test('Player actions preserve constructor identity and native listeners when patched after mount', () => {
+    const parser = fs.readFileSync(path.resolve(__dirname, '../../mods/utils/ASTParser.js'), 'utf8')
+        .replace(/^import[^\n]*\n/gm, '').replace('export function', 'function');
+    const extractAssignedFunctions = vm.runInNewContext(parser + '\nextractAssignedFunctions;', {
+        esprima: require('../../mods/node_modules/esprima'), estraverse: require('../../mods/node_modules/estraverse')
+    });
+    function NativeActions(props) {
+        this.props = props;
+        this.on = (type, listener) => this.listeners.push(listener);
+        this.listeners = [];
+        this.keyHandler = function () {};
+        this.promoted = function () { return 'TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION'; };
+        this.openSettings = function () { this.popup = 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS'; };
+        this.settings = function () {
+            const type = 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS';
+            return function () { return this.props.data.settingActions; };
+        }();
+        this.engagement = function () { return this.props.data.engagementActions; };
+    }
+    NativeActions.prototype.mount = function () { this.on('keydown', this.keyHandler); };
+    const props = () => ({ data: { settingActions: [{ type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS' }], engagementActions: [] } });
+    const existing = new NativeActions(props()); existing.mount();
+    const popup = existing.openSettings;
+    const window = { _yttv: { actions: NativeActions } };
+    const source = fs.readFileSync(path.resolve(__dirname, '../../mods/ui/customUI.js'), 'utf8').replace(/^import[^\n]*\n/gm, '');
+    vm.runInNewContext(source, {
+        window,
+        document: { readyState: 'complete', querySelectorAll: () => [{ __instance: existing }] },
+        configRead: key => ['enablePatchingVideoPlayer', 'enableMPButton', 'enableSpeedControlsButton', 'enableSuperThanksButton', 'enableAIAskButton'].includes(key),
+        extractAssignedFunctions, ButtonRenderer: () => ({}), t: key => key
+    });
+    assert.equal(window._yttv.actions, NativeActions, 'Patching must keep the component constructor registered by YouTube');
+    assert.equal(existing.openSettings, popup, 'The settings popup action must not be mistaken for the settings button list');
+    assert.equal(existing.listeners.length, 1, 'Patching a mounted component must not mount a replacement');
+    assert.equal(existing.settings().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP').length, 1);
+    assert.equal(existing.settings().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP').length, 1);
+    const next = new NativeActions(props()); next.mount();
+    assert.equal(next.constructor, NativeActions);
+    assert.equal(next.listeners.length, 1);
+    assert.equal(next.settings().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP').length, 1);
+    assert.equal(next.engagement().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED').length, 1);
+});
+
+test('Guide JSON hook accepts unrelated values and preserves unknown guide entries', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../mods/ui/customGuideAction.js'), 'utf8').replace(/^import[^\n]*\n/gm, '');
+    const context = vm.createContext({ configRead: key => key === 'sidebarContentsOrder' ? ['known'] : false,
+        configWrite() {}, configChangeEmitter: { addEventListener() {} } });
+    vm.runInContext(source, context);
+    for (const json of ['null','{"items":[]}','{"items":[{}]}','[1,2]']) {
+        assert.equal(vm.runInContext('JSON.stringify(JSON.parse(' + JSON.stringify(json) + '))',context),json);
+    }
+    const input = {items:[{guideSectionRenderer:{items:[
+        {guideEntryRenderer:{navigationEndpoint:{browseEndpoint:{browseId:'known'}}}},
+        {guideEntryRenderer:{navigationEndpoint:{custom:'synthetic'}}}
+    ]}}]};
+    const result = vm.runInContext('JSON.parse(' + JSON.stringify(JSON.stringify(input)) + ')',context);
+    assert.equal(result.items[0].guideSectionRenderer.items.length,2);
+});
+
 test('early module initialization handles fresh and malformed YouTube profiles', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/ui/disableWhosWatching.js'), 'utf8').replace(/^import[^\n]*\n/, '');
     const context = { localStorage: {}, configRead: () => false, configChangeEmitter: { addEventListener() {} } };
