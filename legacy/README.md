@@ -63,6 +63,14 @@ Web Inspector permits JavaScript execution and access to account data without se
 
 The logger keeps up to 300 entries in each of the shell and frame buffers, records playback samples every ten seconds while playing, and removes sensitive values from diagnostic strings. Closing the app clears the buffers. OAuth response classification used during manual investigation is not a shipped feature.
 
+For continuous recording on a connected PC, keep a debug session open and run:
+
+```sh
+node legacy/record-diagnostics.js TV_IP OUTPUT_DIRECTORY
+```
+
+The recorder drains the shell log (including forwarded frame events) and samples selected playback buffers, playback rate and TLS counters once per second. It writes JSON Lines files, rotates at 16 MiB and retains up to 32 recorder files in the chosen directory. That directory should be dedicated to diagnostics; retention also covers recorder files from previous runs. It never deletes unrelated files. Ctrl+C stops recording. Keep the PC and recorder running while watching. After a connection loss it waits and reconnects to an available debug session without restarting the TV app. A normal app launch requires another debug launch. Missing ring-buffer entries are reported; activity during a disconnected interval cannot be recovered after the buffer wraps or the app closes. Account data, complete URLs, headers and response bodies are not collected; arbitrary page exception messages are omitted. Clock ratios are diagnostic measurements and can also change during a seek or video transition.
+
 ## Loading feedback and networking
 
 The shell owns the dotted indicator and its clockwise keyframes. Frame media events supply loading, buffering and seeking states; visible YouTube spinners supply a generic loading state. Messages are English regardless of the YouTube interface language.
@@ -70,6 +78,8 @@ The shell owns the dotted indicator and its clockwise keyframes. Frame media eve
 Local version 2.3.15 corrects storyboard image URLs that YouTube derives from the widget's `file:` origin. Only storyboard URLs on `i.ytimg.com` are changed to HTTPS; their native sprite geometry is preserved. The seek timestamp also shows the signed offset from the playback position held at the start of seeking, for example `1:34 (+0:10)` or `1:05 (−0:15)`.
 
 Local version 2.3.16 checks the actual playback position before SponsorBlock skips and reschedules on buffering, seeking and playback speed changes. Playback and watch-history requests use the API queue independently of the single telemetry slot. DeArrow processes both video card formats again. These fixes have local regression coverage; TV validation is pending.
+
+Local version 2.3.17 avoids copying a single binary response chunk and decodes growing UTF-8 text incrementally without repeatedly joining the received byte prefix. LOADING notifications repeat at approximately 50 ms intervals when data arrives, followed by a final progress event before DONE. Binary responses remain unavailable until DONE. Preferred quality falls back to the nearest available lower resolution; Auto resets a range previously applied by the mod. DeArrow branding shares the single background slot, combines pending requests for the same video, caches at most 128 successful results for five minutes in memory and cancels pending requests on hash navigation. Playback diagnostics follow replacement video elements and report delayed 500 ms timer callbacks; those measurements are not a GC counter. The native TLS module and block sizes are unchanged. TV validation of this version is pending, and the intermittent playback stall remains unresolved.
 
 The local TLS integration routes asynchronous HTTPS XMLHttpRequest and fetch requests through an ARM NaCl module with Mbed TLS 3.6.7. This includes the initial YouTube HTML, JSON APIs, OAuth requests, playback/history pings, SponsorBlock, and the binary POST/range requests used by the MSE video player. The existing player still decodes audio/video and handles seeking. TCP connections originate on the TV; no computer service is used. HTTP/1.1 is used, without QUIC. Gzip responses are decoded incrementally with CRC/truncation checks; unsupported content encodings are rejected.
 

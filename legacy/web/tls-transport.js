@@ -28,23 +28,42 @@
         callback(array.buffer);
     }
     function combine(chunks, length) {
+        if (chunks.length === 1) return chunks[0];
         var all = new root.Uint8Array(length), at = 0;
         for (var i = 0; i < chunks.length; i++) { all.set(new root.Uint8Array(chunks[i]), at); at += chunks[i].byteLength; }
         return all.buffer;
     }
-    function text(buffer) {
-        // Decode UTF-8 without depending on TextDecoder in the 2016 browser.
+    function text(buffer, decoder, final) {
+        // Decode only new bytes, retaining an incomplete UTF-8 scalar across chunks.
         var array = new root.Uint8Array(buffer), result = [], part = '';
         for (var i = 0; i < array.length;) {
-            var c = array[i++], n = c < 128 ? 0 : c >= 194 && c <= 223 ? 1 : c >= 224 && c <= 239 ? 2 : c >= 240 && c <= 244 ? 3 : -1;
-            var cp = n === 0 ? c : c & (n === 1 ? 31 : n === 2 ? 15 : 7), start = i;
-            if (n < 0) { part += '\ufffd'; continue; }
-            for (var j = 0; j < n && i < array.length && (array[i] & 192) === 128; j++) cp = cp * 64 + (array[i++] & 63);
-            if (i - start !== n || (n === 1 && cp < 128) || (n === 2 && cp < 2048) || (n === 3 && cp < 65536) || cp > 1114111 || (cp >= 55296 && cp <= 57343)) part += '\ufffd';
-            else if (cp < 65536) part += String.fromCharCode(cp);
-            else { cp -= 65536; part += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023)); }
+            var c = array[i], cp;
+            if (!decoder.need) {
+                i++;
+                if (c < 128) cp = c;
+                else if (c >= 194 && c <= 244) {
+                    decoder.need = c <= 223 ? 1 : c <= 239 ? 2 : 3;
+                    decoder.code = c & (decoder.need === 1 ? 31 : decoder.need === 2 ? 15 : 7);
+                    decoder.lower = c === 224 ? 160 : c === 240 ? 144 : 128;
+                    decoder.upper = c === 237 ? 159 : c === 244 ? 143 : 191;
+                    continue;
+                } else cp = 65533;
+            } else if (c < decoder.lower || c > decoder.upper) {
+                decoder.need = 0; cp = 65533; // Reconsume the invalid continuation as a new byte.
+            } else {
+                i++; decoder.code = decoder.code * 64 + (c & 63);
+                decoder.lower = 128; decoder.upper = 191;
+                if (--decoder.need) continue;
+                cp = decoder.code;
+            }
+            if (!decoder.first || cp !== 65279) {
+                if (cp < 65536) part += String.fromCharCode(cp);
+                else { cp -= 65536; part += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023)); }
+            }
+            decoder.first = false;
             if (part.length > 8192) { result.push(part); part = ''; }
         }
+        if (final && decoder.need) { part += '\ufffd'; decoder.need = 0; decoder.first = false; }
         result.push(part); return result.join('');
     }
     function headers(raw) {
@@ -116,8 +135,9 @@
         function request(method, url, h, body, callback) {
             var u = resolve(root, url);
             var r = { id: ++sequence, method: method, url: url, parsed: u, headers: h, body: body, callback: callback, mode: mode, redirects: 0, retries: 0, group: category(u), queuedAt: Date.now(),
-                background: /(^|\.)youtube\.com$/i.test(u.hostname) && /^\/(api\/stats\/|ptracking(?:\?|$)|generate_204|youtubei\/v1\/log_event)/.test(u.pathname) &&
-                    !/^\/api\/stats\/(playback|watchtime)$/.test(u.pathname) };
+                background: (/^sponsor\.ajay\.app$/i.test(u.hostname) && u.pathname === '/api/branding') ||
+                    (/(^|\.)youtube\.com$/i.test(u.hostname) && /^\/(api\/stats\/|ptracking(?:\?|$)|generate_204|youtubei\/v1\/log_event)/.test(u.pathname) &&
+                    !/^\/api\/stats\/(playback|watchtime)$/.test(u.pathname)) };
             var key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search);
             if (r.group === 'video' && u.pathname === '/videoplayback') {
                 r.mediaKey = key ? key[1] : mediaKey;
@@ -225,7 +245,12 @@
             this._native = null; this._request = null; this._state = 0; this._status = 0; this._statusText = ''; this._url = '';
             this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._length = 0; this._body = null;
             this.timeout = 0; this.withCredentials = false; this.responseType = ''; this._sent = false;
-            this._generation = 0; this._text = null; this._textLength = -1; this._jsonReady = false;
+            this._generation = 0; resetText(this);
+        }
+        function resetText(xhr) {
+            xhr._text = ''; xhr._decodeIndex = 0; xhr._textFinal = false; xhr._jsonReady = false; xhr._json = null;
+            xhr._decoder = { need: 0, code: 0, lower: 128, upper: 191, first: true };
+            xhr._lastProgress = -Infinity;
         }
         function state(xhr, value) { xhr._state = value; xhr._event('readystatechange'); }
         function untrack(xhr) { clearTimeout(xhr._timer); live = live.filter(function (item) { return item !== xhr; }); xhr._request = null; xhr._sent = false; }
@@ -233,7 +258,7 @@
             var generation = xhr._generation;
             transport.abort(xhr._request); untrack(xhr); xhr._chunks = []; xhr._body = null; xhr._length = 0;
             xhr._status = 0; xhr._statusText = ''; xhr._responseHeaders = {}; xhr._url = '';
-            xhr._text = null; xhr._textLength = -1; xhr._jsonReady = false;
+            resetText(xhr);
             state(xhr, 4);
             if (xhr._generation !== generation) return;
             xhr._event(type);
@@ -242,7 +267,7 @@
         XHR.prototype.open = function (method, url, async, user, password) {
             this.abort(); this._method = String(method).toUpperCase(); this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._length = 0; this._body = null;
             this._generation++;
-            this._text = null; this._textLength = -1; this._jsonReady = false; this._json = null;
+            resetText(this);
             this._status = 0; this._statusText = ''; this._url = ''; this._native = null;
             var u = resolve(win, url);
             this._target = u.href;
@@ -298,25 +323,34 @@
                         self._status = m.status; self._statusText = m.statusText; self._responseHeaders = m.headers; self._url = m.url; state(self, 2);
                     } else if (m.type === 'data') {
                         self._chunks.push(m.body); self._length += m.body.byteLength;
-                        if (self._state !== 3) state(self, 3);
+                        var now = Date.now();
+                        if (now - self._lastProgress < 50) return;
+                        self._lastProgress = now;
+                        state(self, 3);
                         if (self._sent && self._generation === generation) self._event('progress', self._length, +self._responseHeaders['content-length'] || 0);
                     } else if (m.type === 'done') {
-                        self._body = combine(self._chunks, self._length); self._chunks = []; untrack(self);
+                        var total = +self._responseHeaders['content-length'] || 0;
+                        self._event('progress', self._length, total);
+                        if (!self._sent || self._generation !== generation) return;
+                        if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length);
+                        else decoded(self, true);
+                        self._chunks = []; untrack(self);
                         state(self, 4);
-                        if (self._generation !== generation) return;
-                        self._event('load', self._length, self._length);
-                        if (self._generation === generation) self._event('loadend', self._length, self._length);
+                        if (self._generation !== generation || self._state !== 4) return;
+                        self._event('load', self._length, total);
+                        if (self._generation === generation && self._state === 4) self._event('loadend', self._length, total);
                     } else if (m.type === 'error') fail(self, m.error === 'timeout' ? 'timeout' : 'error');
                 });
                 self.upload._event('loadstart'); self.upload._event('progress', body.byteLength, body.byteLength);
                 self.upload._event('load'); self.upload._event('loadend');
             });
         };
-        function buffer(xhr) { return xhr._body || combine(xhr._chunks, xhr._length); }
-        function decoded(xhr) {
-            if (xhr._text === null || xhr._textLength !== xhr._length) {
-                xhr._text = text(buffer(xhr)); xhr._textLength = xhr._length;
-            }
+        function decoded(xhr, final) {
+            if (xhr._textFinal) return xhr._text;
+            var parts = [];
+            while (xhr._decodeIndex < xhr._chunks.length) parts.push(text(xhr._chunks[xhr._decodeIndex++], xhr._decoder, false));
+            if (final) { parts.push(text(new root.ArrayBuffer(0), xhr._decoder, true)); xhr._textFinal = true; }
+            xhr._text += parts.join('');
             return xhr._text;
         }
         function responseText(xhr) {
@@ -324,7 +358,7 @@
             return xhr._state < 3 ? '' : decoded(xhr);
         }
         function responseXML(xhr) {
-            if (xhr._state !== 4 || !xhr._body) return null;
+            if (xhr._state !== 4) return null;
             var mime = xhr._mime || xhr._responseHeaders['content-type'] || 'text/xml';
             return new win.DOMParser().parseFromString(decoded(xhr), mime.indexOf('text/html') === 0 ? 'text/html' : 'text/xml');
         }
@@ -333,7 +367,7 @@
             responseURL: function () { return this._url; }, responseText: function () { return responseText(this); }, responseXML: function () { return responseXML(this); },
             response: function () {
                 if (!this.responseType || this.responseType === 'text') return responseText(this);
-                if (this._state !== 4 || !this._body) return null;
+                if (this._state !== 4) return null;
                 if (this.responseType === 'arraybuffer') return this._body;
                 if (this.responseType === 'blob') return new win.Blob([this._body], { type: this._mime || this._responseHeaders['content-type'] || '' });
                 if (this.responseType === 'document') return responseXML(this);

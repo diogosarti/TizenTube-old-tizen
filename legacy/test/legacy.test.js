@@ -64,7 +64,7 @@ test('Player actions preserve constructor identity and native listeners when pat
         window,
         document: { readyState: 'complete', querySelectorAll: () => [{ __instance: existing }] },
         configRead: key => ['enablePatchingVideoPlayer', 'enableMPButton', 'enableSpeedControlsButton', 'enableSuperThanksButton', 'enableAIAskButton'].includes(key),
-        extractAssignedFunctions, ButtonRenderer: () => ({}), t: key => key
+        extractAssignedFunctions, ButtonRenderer: (_toggle, _text, icon) => ({ icon }), t: key => key
     });
     assert.equal(window._yttv.actions, NativeActions, 'Patching must keep the component constructor registered by YouTube');
     assert.equal(existing.openSettings, popup, 'The settings popup action must not be mistaken for the settings button list');
@@ -76,6 +76,29 @@ test('Player actions preserve constructor identity and native listeners when pat
     assert.equal(next.listeners.length, 1);
     assert.equal(next.settings().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP').length, 1);
     assert.equal(next.engagement().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED').length, 1);
+    assert.equal(next.engagement().find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED').button.buttonRenderer.icon, 'SPEEDOMETER');
+});
+
+test('Playback settings route both speed icons to the custom menu and preserve unrelated actions', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../mods/resolveCommand.js'), 'utf8')
+        .replace(/^import[^\n]*\n/gm, '').replace(/^export default /gm, '').replace(/^export /gm, '');
+    let forwarded;
+    const window = { _yttv: { app: { instance: { resolveCommand(cmd) { forwarded = cmd; return 'native'; } } } } };
+    vm.runInNewContext(source + '\npatchResolveCommand();', { window, t: key => key, buttonItem: () => ({ injected: true }) });
+    const items = ['SLOW_MOTION_VIDEO', 'SPEEDOMETER', 'SETTINGS'].map(iconType => ({ compactLinkRenderer: {
+        icon: { iconType }, subtitle: { simpleText: 'Original' }, serviceEndpoint: { original: true }
+    } }));
+    const renderers = items.map(item => item.compactLinkRenderer);
+    const cmd = { openPopupAction: { uniqueId: 'playback-settings', popup: { overlaySectionRenderer: { overlay: {
+        overlayTwoPanelRenderer: { actionPanel: { overlayPanelRenderer: { content: { overlayPanelItemListRenderer: { items } } } } }
+    } } } } };
+    assert.equal(window._yttv.app.instance.resolveCommand(cmd), 'native');
+    assert.equal(forwarded, cmd);
+    for (const renderer of renderers.slice(0, 2)) {
+        assert.equal(renderer.serviceEndpoint.signalAction.customAction.action, 'TT_SPEED_SETTINGS_SHOW');
+        assert.equal(renderer.subtitle.simpleText, 'player.withTizenTube');
+    }
+    assert.deepEqual(renderers[2].serviceEndpoint, { original: true });
 });
 
 test('Guide JSON hook accepts unrelated values and preserves unknown guide entries', () => {
@@ -94,14 +117,16 @@ test('Guide JSON hook accepts unrelated values and preserves unknown guide entri
     assert.equal(result.items[0].guideSectionRenderer.items.length,2);
 });
 
-test('DeArrow updates both video card formats, skips non-video cards and respects the disabled setting', async () => {
+test('DeArrow updates video cards, deduplicates and caches branding, and cancels pending navigation work', async () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/features/adblock.js'), 'utf8');
-    const requests = []; let enabled = true;
-    const deArrowify = vm.runInNewContext(source.slice(source.indexOf('function deArrowify('), source.indexOf('function hqify(')) + '\ndeArrowify;', {
+    const requests = []; let enabled = true, now = 1000, navigation;
+    const deArrowify = vm.runInNewContext(source.slice(source.indexOf('const brandingCache'), source.indexOf('function hqify(')) + '\ndeArrowify;', {
         configRead: () => enabled,
-        fetch(url) {
-            requests.push(url);
-            return Promise.resolve({ json: () => Promise.resolve({ titles: [{ title: 'Revised title', votes: 2 }], thumbnails: [{ timestamp: 15, votes: 3 }] }) });
+        Date: { now: () => now }, window: { addEventListener(type, fn) { navigation = fn; } },
+        XMLHttpRequest: function () {
+            this.open = (method, url) => { this.url = url; };
+            this.send = () => { requests.push(this); };
+            this.abort = () => { this.aborted = true; this.onabort(); };
         }
     });
     const tile = { tileRenderer: { style: 'TILE_STYLE_YTLR_DEFAULT', contentId: 'synthetic-tile',
@@ -111,6 +136,12 @@ test('DeArrow updates both video card formats, skips non-video cards and respect
     const items = [{ adSlotRenderer: {} }, { adSlotRenderer: {} }, tile, lockup,
         { tileRenderer: { style: 'TILE_STYLE_YTLR_CHANNEL' } }, { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST' } }];
     deArrowify(items);
+    deArrowify(items);
+    assert.equal(requests.length, 2, 'Identical pending video IDs must share one request');
+    for (const xhr of requests) {
+        xhr.status = 200; xhr.response = { titles: [{ title: 'Revised title', votes: 2 }], thumbnails: [{ timestamp: 15, votes: 3 }] };
+        xhr.onload();
+    }
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(requests.length, 2);
     assert.equal(items.length, 4, 'Consecutive ad slots must still be removed');
@@ -118,8 +149,14 @@ test('DeArrow updates both video card formats, skips non-video cards and respect
     assert.equal(lockup.lockupViewModel.metadata.lockupMetadataViewModel.title.content, 'Revised title');
     assert.match(tile.tileRenderer.header.tileHeaderRenderer.thumbnail.thumbnails[0].url, /videoID=synthetic-tile&time=15$/);
     assert.match(lockup.lockupViewModel.contentImage.thumbnailViewModel.image.sources[0].url, /videoID=synthetic-lockup&time=15$/);
+    deArrowify(items); assert.equal(requests.length, 2, 'Fresh cached branding must not start another request');
     enabled = false; deArrowify(items);
     assert.equal(requests.length, 2, 'Disabled DeArrow must not issue requests');
+    enabled = true; now += 300001; deArrowify(items);
+    assert.equal(requests.length, 4, 'Expired entries must be requested again');
+    navigation();
+    assert.ok(requests.slice(2).every(xhr => xhr.aborted), 'Navigation must abort all pending branding requests');
+    await new Promise(resolve => setImmediate(resolve));
 });
 
 test('early module initialization handles fresh and malformed YouTube profiles', () => {
@@ -422,15 +459,19 @@ test('loading feedback follows media events and visible spinners', () => {
     const events = {}, mediaEvents = {}, statuses = [], ticks = [];
     const spinner = { nodeType: 1, parentNode: null, getBoundingClientRect: () => ({ width: 50, height: 50 }) };
     let spinnerVisible = false;
+    let removed = 0, now = 1000;
     const video = { currentTime: 0, buffered: { length: 0 }, addEventListener: (type, fn) => {
         if (!mediaEvents[type]) mediaEvents[type] = [];
         mediaEvents[type].push(fn);
-    } };
+    }, removeEventListener(type, fn) { removed++; mediaEvents[type] = mediaEvents[type].filter(f => f !== fn); } };
+    let currentVideo = video;
+    const log = Logger.create(20);
     function fire(type) { mediaEvents[type].forEach(fn => fn()); }
     const window = { addEventListener: (type, fn) => { events[type] = fn; }, getComputedStyle: () => ({ display: spinnerVisible ? 'block' : 'none', visibility: 'visible', opacity: '1' }) };
     vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../web/frame.js'), 'utf8'), {
-        window, parent: { __legacyLog: Logger.create(20), __legacyStatus: text => statuses.push(text) }, LegacyLogger: Logger,
-        document: { addEventListener() {}, querySelector: () => video, querySelectorAll: () => [spinner] },
+        window, parent: { __legacyLog: log, __legacyStatus: text => statuses.push(text) }, LegacyLogger: Logger,
+        Date: { now: () => now },
+        document: { addEventListener() {}, querySelector: () => currentVideo, querySelectorAll: () => [spinner] },
         MutationObserver: function () { this.disconnect = () => {}; },
         setInterval: fn => ticks.push(fn), setTimeout() {}
     });
@@ -448,6 +489,14 @@ test('loading feedback follows media events and visible spinners', () => {
     assert.equal(statuses.at(-1), 'Loading…');
     spinnerVisible = false; ticks[0]();
     assert.equal(statuses.at(-1), '');
+    currentVideo = { ...video, currentTime: 12, paused: false, readyState: 4 };
+    ticks[0]();
+    assert.ok(removed >= 10, 'Replacing video must detach listeners from the previous element');
+    fire('waiting');
+    assert.equal(statuses.at(-1), 'Buffering…');
+    assert.ok(log.read().some(entry => entry.code === 'video.waiting' && /time=12\.0/.test(entry.detail)));
+    now += 1500; ticks[0]();
+    assert.ok(log.read().some(entry => entry.code === 'video.loop-delay' && /lateMs=1000/.test(entry.detail)));
 });
 
 test('spatial key handler uses frame mode when parent has no navigation API', () => {

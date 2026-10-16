@@ -1,5 +1,14 @@
 ﻿# Changelog
 
+## v2.3.17 (beta)
+
+- Fixed the custom playback-speed menu for YouTube's new speed icon while retaining support for the previous icon.
+- Reduced network response copying and improved incremental UTF-8 text decoding.
+- Improved XHR loading and progress event handling.
+- Fixed preferred-quality fallback to the nearest available lower resolution and restored adaptive quality when selecting Auto.
+- Reduced duplicate DeArrow requests with caching, lower request priority and cancellation on navigation.
+- Fixed the default preferred-codec setting.
+
 ## v2.3.16 (beta)
 
 - Fixed premature SponsorBlock skips during buffering and adjusted skip scheduling for playback speed changes.

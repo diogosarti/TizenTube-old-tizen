@@ -398,6 +398,42 @@ function addPreviews(items) {
   }
 }
 
+const brandingCache = new Map();
+const brandingRequests = new Map();
+
+function getBranding(videoID) {
+  const cached = brandingCache.get(videoID);
+  if (cached && Date.now() - cached.at < 300000) return Promise.resolve(cached.data);
+  brandingCache.delete(videoID);
+  if (brandingRequests.has(videoID)) return brandingRequests.get(videoID).promise;
+  const xhr = new XMLHttpRequest();
+  const entry = { xhr };
+  entry.promise = new Promise(resolve => {
+    function finish(data) {
+      brandingRequests.delete(videoID);
+      if (data) {
+        if (brandingCache.size >= 128) brandingCache.delete(brandingCache.keys().next().value);
+        brandingCache.set(videoID, { at: Date.now(), data });
+      }
+      resolve(data);
+    }
+    xhr.open('GET', `https://sponsor.ajay.app/api/branding?videoID=${videoID}`);
+    xhr.responseType = 'json';
+    xhr.onload = () => {
+      const data = xhr.response;
+      finish(xhr.status === 200 && data && Array.isArray(data.titles) && Array.isArray(data.thumbnails) ? data : null);
+    };
+    xhr.onerror = xhr.ontimeout = xhr.onabort = () => finish(null);
+  });
+  brandingRequests.set(videoID, entry);
+  xhr.send();
+  return entry.promise;
+}
+
+window.addEventListener('hashchange', () => {
+  Array.from(brandingRequests.values()).forEach(entry => entry.xhr.abort());
+});
+
 function deArrowify(items) {
   for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
     const item = items[itemIndex];
@@ -409,7 +445,8 @@ function deArrowify(items) {
     if (item.tileRenderer?.style !== 'TILE_STYLE_YTLR_DEFAULT' && item.lockupViewModel?.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO') continue;
     if (configRead('enableDeArrow')) {
       const videoID = item.tileRenderer ? item.tileRenderer.contentId : item.lockupViewModel.contentId;
-      fetch(`https://sponsor.ajay.app/api/branding?videoID=${videoID}`).then(res => res.json()).then(data => {
+      getBranding(videoID).then(data => {
+        if (!data || !configRead('enableDeArrow')) return;
         if (data.titles.length > 0) {
           const mostVoted = data.titles.reduce((max, title) => max.votes > title.votes ? max : title);
           item.tileRenderer ?

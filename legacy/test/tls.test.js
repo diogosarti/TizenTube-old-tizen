@@ -6,10 +6,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const Logger = require('../web/logger');
 
-function setup(mode = 'auto') {
+function setup(mode = 'auto', options = {}) {
     const listeners = {}, sent = [], timers = new Set();
     const container = { addEventListener(type, callback) { listeners[type] = callback; }, appendChild() {} };
-    const win = { ArrayBuffer, Uint8Array, navigator: { userAgent: 'Synthetic test' },
+    const win = { ArrayBuffer, Uint8Array: options.Uint8Array || Uint8Array, navigator: { userAgent: 'Synthetic test' },
         localStorage: { getItem: () => JSON.stringify({ tlsMode: mode }) }, addEventListener() {},
         document: { createElement(type) {
             if (type === 'embed') return { postMessage: value => sent.push(value) };
@@ -20,7 +20,7 @@ function setup(mode = 'auto') {
                 get search() { return url.search; }, get username() { return url.username; }, get password() { return url.password; } };
         } }, XMLHttpRequest: function () { throw new Error('Unexpected system fallback'); } };
     const log = Logger.create(100);
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/tls-transport.js'), 'utf8'), { window: win, setTimeout(callback, ms) {
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/tls-transport.js'), 'utf8'), { window: win, Date: options.Date || Date, setTimeout(callback, ms) {
         const t = setTimeout(() => { timers.delete(t); callback(); }, ms); timers.add(t); return t;
     }, clearTimeout(t) { clearTimeout(t); timers.delete(t); } });
     const transport = win.LegacyTLS.create(container, log);
@@ -222,5 +222,97 @@ test('Cached JSON response keeps identity and reopening discards the old respons
         assert.equal(first.message,'Привет'); assert.equal(xhr.response,first);
         xhr.open('GET','https://www.youtube.com/synthetic2'); xhr.send(); reply({message:'second'});
         assert.equal(xhr.response.message,'second'); assert.notEqual(xhr.response,first);
+    } finally { env.close(); }
+});
+
+test('XHR decodes growing UTF-8 once without prefix copies and reuses a single binary chunk', () => {
+    let allocated = 0, now = 1000;
+    function TrackedArray(value) { if (typeof value === 'number') allocated += value; return new Uint8Array(value); }
+    const env = setup('auto', { Uint8Array: TrackedArray, Date: { now: () => now } });
+    try {
+        const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', 'https://www.youtube.com/synthetic'); xhr.send();
+        const id = env.sent[0].id;
+        env.message({ type: 'headers', id, status: 200, headers: '' });
+        const decoder = new TextDecoder(); let expected = '';
+        for (const chunk of [[239], [187], [191, 65, 208], [150, 240, 159], [152, 128, 255, 226, 66, 226, 130]]) {
+            const body = Uint8Array.from(chunk);
+            expected += decoder.decode(body, { stream: true }); now += 100;
+            env.message({ type: 'data', id, body: body.buffer });
+            assert.equal(xhr.responseText, expected, 'Only complete UTF-8 scalars should be visible during loading');
+            assert.equal(xhr.responseText, expected);
+        }
+        env.message({ type: 'done', id }); expected += decoder.decode();
+        assert.equal(xhr.responseText, expected, 'Truncated final UTF-8 becomes a replacement character');
+        xhr.open('GET', 'https://www.youtube.com/large-text'); xhr.send();
+        const next = env.sent.at(-1).id; env.message({ type: 'headers', id: next, status: 200, headers: '' });
+        const block = new Uint8Array(256 * 1024).fill(65).buffer;
+        for (let i = 0; i < 8; i++) {
+            now += 100; env.message({ type: 'data', id: next, body: block });
+            assert.equal(xhr.responseText.length, (i + 1) * block.byteLength);
+        }
+        env.message({ type: 'done', id: next });
+        assert.equal(allocated, 0, 'Growing text must not allocate combined byte prefixes, including at DONE');
+        xhr.open('GET', 'https://media.googlevideo.com/videoplayback'); xhr.responseType = 'arraybuffer'; xhr.send();
+        const binary = env.sent.at(-1).id;
+        env.message({ type: 'headers', id: binary, status: 200, headers: '' });
+        env.message({ type: 'data', id: binary, body: block });
+        assert.equal(xhr.response, null, 'Binary response remains unavailable before DONE');
+        env.message({ type: 'done', id: binary });
+        assert.equal(xhr.response, block, 'A single complete chunk must not be copied');
+    } finally { env.close(); }
+});
+
+test('XHR repeats LOADING notifications at bounded frequency and stops old events after reentry', () => {
+    let now = 1000;
+    const env = setup('auto', { Date: { now: () => now } });
+    try {
+        const xhr = new env.win.XMLHttpRequest(), events = [];
+        xhr.onreadystatechange = () => events.push('state:' + xhr.readyState);
+        xhr.onprogress = e => events.push('progress:' + e.loaded);
+        xhr.onload = () => events.push('load'); xhr.onloadend = () => events.push('loadend');
+        xhr.open('GET', 'https://www.youtube.com/synthetic'); xhr.send();
+        const id = env.sent[0].id;
+        env.message({ type: 'headers', id, status: 200, headers: 'Content-Length: 33\r\n' });
+        for (let i = 0; i < 32; i++) env.message({ type: 'data', id, body: Uint8Array.from([65]).buffer });
+        assert.equal(events.filter(e => e.startsWith('progress')).length, 1);
+        now += 100; env.message({ type: 'data', id, body: Uint8Array.from([66]).buffer });
+        assert.equal(events.filter(e => e === 'state:3').length, 2);
+        env.message({ type: 'done', id });
+        assert.deepEqual(events.slice(-4), ['progress:33', 'state:4', 'load', 'loadend']);
+        assert.equal(xhr.responseText.length, 33);
+
+        // Reopening from LOADING must suppress the old progress and completion.
+        xhr.open('GET', 'https://www.youtube.com/old'); xhr.send();
+        const old = env.sent.at(-1).id;
+        env.message({ type: 'headers', id: old, status: 200, headers: '' });
+        xhr.onreadystatechange = () => { if (xhr.readyState === 3) { xhr.open('GET', 'https://www.youtube.com/new'); xhr.send(); } };
+        events.length = 0;
+        env.message({ type: 'data', id: old, body: Uint8Array.from([67]).buffer });
+        env.message({ type: 'done', id: old });
+        assert.equal(xhr.readyState, 1); assert.deepEqual(events, ['loadend'], 'Only the aborted request may emit loadend');
+
+        // Reopening from the final progress must also suppress DONE/load/loadend.
+        const current = env.sent.at(-1).id;
+        events.length = 0;
+        xhr.onreadystatechange = null;
+        xhr.onprogress = () => { xhr.open('GET', 'https://www.youtube.com/final-new'); xhr.send(); };
+        env.message({ type: 'headers', id: current, status: 200, headers: '' });
+        env.message({ type: 'done', id: current });
+        assert.equal(xhr.readyState, 1); assert.deepEqual(events, ['loadend']);
+    } finally { env.close(); }
+});
+
+test('Branding stays below history and SponsorBlock and uses one background slot', () => {
+    const env = setup();
+    try {
+        function start(url) { const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', url); xhr.send(); }
+        for (let i = 0; i < 10; i++) start('https://sponsor.ajay.app/api/branding?videoID=synthetic-' + i);
+        assert.equal(env.sent.length, 1);
+        start('https://media.googlevideo.com/videoplayback?id=synthetic');
+        start('https://media.googlevideo.com/videoplayback?id=synthetic&mime=audio%2Fmp4');
+        start('https://www.youtube.com/api/stats/watchtime');
+        start('https://sponsor.ajay.app/api/skipSegments/abcd');
+        assert.deepEqual(env.sent.slice(-2).map(r => r.path), ['/api/stats/watchtime', '/api/skipSegments/abcd']);
+        assert.equal(env.transport.summary().active, 5); assert.equal(env.transport.summary().queued, 9);
     } finally { env.close(); }
 });

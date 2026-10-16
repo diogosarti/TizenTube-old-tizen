@@ -35,9 +35,16 @@
     log.record('page.start', 'fetch=' + typeof window.fetch + '; Promise=' + typeof window.Promise + '; MSE=' + !!(window.MediaSource || window.WebKitMediaSource));
     window.addEventListener('DOMContentLoaded', function () {
         log.record('page.dom', 'DOM ready; video=' + !!document.querySelector('video'));
-        var video = document.querySelector('video');
+        var video = null;
+        var detachVideo = function () {};
         var mediaStatus = '';
         function updateStatus() {
+            var current = document.querySelector('video');
+            if (current !== video) {
+                detachVideo(); detachVideo = function () {}; sampleVideo = function () {};
+                video = current; mediaStatus = '';
+                if (video) attach(video);
+            }
             if (video && /^https?:/i.test(video.currentSrc || '') && parent.__legacyTLS) parent.__legacyTLS.system('video');
             var text = mediaStatus;
             var playing = video && !video.paused && !video.seeking && video.readyState >= 3;
@@ -56,14 +63,12 @@
             }
             if (parent !== window) parent.__legacyStatus(text, window, text !== 'Unable to play video');
         }
-        setInterval(updateStatus, 500);
-        var observer = new MutationObserver(function () {
-            if (!video) { video = document.querySelector('video'); if (video) attach(video); }
-        });
         function attach(element) {
-            observer.disconnect();
+            var listeners = [];
+            function listen(type, fn) { element.addEventListener(type, fn); listeners.push([type, fn]); }
+            detachVideo = function () { listeners.forEach(function (entry) { element.removeEventListener(entry[0], entry[1]); }); };
             ['loadstart', 'waiting', 'stalled', 'seeking', 'playing', 'canplay', 'seeked', 'emptied', 'ended', 'error'].forEach(function (type) {
-                element.addEventListener(type, function () {
+                listen(type, function () {
                     if (type === 'loadstart') mediaStatus = 'Loading video…';
                     else if (type === 'waiting' || type === 'stalled') mediaStatus = 'Buffering…';
                     else if (type === 'seeking') mediaStatus = 'Seeking…';
@@ -86,17 +91,21 @@
                     '; error=' + (element.error ? element.error.code : 0);
             }
             ['loadedmetadata', 'playing', 'waiting', 'stalled', 'ended', 'error'].forEach(function (type) {
-                element.addEventListener(type, function () {
+                listen(type, function () {
                     log.record('video.' + type, state());
                 });
             });
-            setInterval(function () {
-                if (!element.paused && !element.ended) log.record('video.sample', state());
-            }, 10000);
+            sampleVideo = function () { if (!element.paused && !element.ended) log.record('video.sample', state()); };
             log.record('video.attached', 'Media events enabled');
         }
-        if (video) attach(video);
-        else observer.observe(document.body, { childList: true, subtree: true });
+        var sampleVideo = function () {};
+        var lastTick = Date.now();
+        setInterval(function () {
+            var now = Date.now(), elapsed = now - lastTick; lastTick = now;
+            if (video && !video.paused && elapsed > 1000) log.record('video.loop-delay', 'intervalMs=' + elapsed + '; lateMs=' + (elapsed - 500));
+            updateStatus();
+        }, 500);
+        setInterval(function () { if (video) sampleVideo(); }, 10000);
         updateStatus();
         setTimeout(function () {
             log.record('page.check', 'video=' + !!document.querySelector('video') + '; yttv=' + !!window._yttv);
