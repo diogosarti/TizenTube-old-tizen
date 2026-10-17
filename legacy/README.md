@@ -63,6 +63,8 @@ Web Inspector permits JavaScript execution and access to account data without se
 
 The logger keeps up to 300 entries in each of the shell and frame buffers, records playback samples every ten seconds while playing, and removes sensitive values from diagnostic strings. Closing the app clears the buffers. OAuth response classification used during manual investigation is not a shipped feature.
 
+On `waiting` or `stalled`, `video.stall-tracks` records the audio/video buffer ahead of the current playback position from YouTube's `lab`/`lvb` statistics, media readiness, playback rate, seeking state, the media error code and available frame counters. Missing or unrecognized track ranges are reported as `unknown`, not as an empty buffer. Track-specific errors are not exposed and remain `unknown`; `video.stall-network` reports aggregate transport counters separately. Five follow-up snapshots run approximately one second apart, including after playback resumes, using the existing status timer. Replacing the video element or starting/unloading/ending media cancels the previous series. These measurements help investigate stalls but do not establish whether the network, JavaScript, MSE or decoder caused them.
+
 For continuous recording on a connected PC, keep a debug session open and run:
 
 ```sh

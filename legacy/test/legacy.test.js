@@ -499,6 +499,49 @@ test('loading feedback follows media events and visible spinners', () => {
     assert.ok(log.read().some(entry => entry.code === 'video.loop-delay' && /lateMs=1000/.test(entry.detail)));
 });
 
+test('Stall diagnostics distinguish track buffers, bound followups and detach on video replacement', () => {
+    const events = {}, ticks = [], log = Logger.create(100);
+    let now = 1000, ranges = { lab: '0.000-30.000', lvb: '0.000-9.000,12.000-20.000', private: 'not for logging' };
+    function media() {
+        const listeners = {};
+        return { currentTime: 10, playbackRate: 1, readyState: 2, networkState: 2, buffered: { length: 0 },
+            paused: false, seeking: false, error: { code: 3 },
+            getVideoPlaybackQuality: () => ({ totalVideoFrames: 120, droppedVideoFrames: 2 }),
+            addEventListener(type, fn) { (listeners[type] || (listeners[type] = [])).push(fn); },
+            removeEventListener(type, fn) { listeners[type] = listeners[type].filter(f => f !== fn); },
+            fire(type) { (listeners[type] || []).slice().forEach(fn => fn()); }
+        };
+    }
+    let video = media();
+    const window = { addEventListener: (type, fn) => { events[type] = fn; } };
+    vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../web/frame.js'), 'utf8'), {
+        window, parent: { __legacyLog: log, __legacyStatus() {}, __legacyTLS: { summary: () => ({ active: 2, queued: 1, errors: 4, completed: 7, bytes: 1024 }) } },
+        LegacyLogger: Logger, Date: { now: () => now },
+        document: { addEventListener() {}, querySelector: selector => selector === 'video' ? video : { getVideoStats: () => ranges }, querySelectorAll: () => [] },
+        setInterval: fn => ticks.push(fn), setTimeout() {}
+    });
+    events.DOMContentLoaded();
+    video.fire('waiting'); video.fire('stalled');
+    const tracks = () => log.read().filter(e => e.code === 'video.stall-tracks');
+    assert.equal(tracks().length, 1, 'Adjacent media events share one track snapshot');
+    assert.match(tracks()[0].detail, /audioAhead=20\.0; videoAhead=0\.0/);
+    assert.match(tracks()[0].detail, /mediaError=3; trackErrors=unknown; decoded=120; dropped=2/);
+    assert.match(log.read().find(e => e.code === 'video.stall-network').detail, /transportErrors=4/);
+    ranges = { lab: 'unavailable', lvb: '0.0-25.0' };
+    video.fire('playing');
+    for (let i = 0; i < 7; i++) { now += 1000; ticks[0](); }
+    assert.equal(tracks().length, 6, 'Exactly five followups, including after playback resumes');
+    assert.match(tracks().at(-1).detail, /audioAhead=unknown; videoAhead=15\.0/);
+    const old = video;
+    video.fire('waiting'); video = media(); ticks[0]();
+    const count = tracks().length;
+    old.fire('stalled'); now += 1000; ticks[0]();
+    assert.equal(tracks().length, count, 'Replacing video cancels old followups and event listeners');
+    ranges = null; video.fire('stalled');
+    assert.match(tracks().at(-1).detail, /audioAhead=unknown; videoAhead=unknown/);
+    assert.doesNotMatch(JSON.stringify(log.read()), /not for logging/);
+});
+
 test('spatial key handler uses frame mode when parent has no navigation API', () => {
     const acorn = require('acorn');
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/spatial-navigation-polyfill.js'), 'utf8');

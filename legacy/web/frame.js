@@ -41,7 +41,7 @@
         function updateStatus() {
             var current = document.querySelector('video');
             if (current !== video) {
-                detachVideo(); detachVideo = function () {}; sampleVideo = function () {};
+                detachVideo(); detachVideo = function () {}; sampleVideo = function () {}; sampleStall = function () {};
                 video = current; mediaStatus = '';
                 if (video) attach(video);
             }
@@ -65,6 +65,47 @@
         }
         function attach(element) {
             var listeners = [];
+            var followups = 0, lastStallSample = -Infinity;
+            function trackAhead(value) {
+                if (typeof value !== 'string') return 'unknown';
+                if (!value.trim()) return '0.0';
+                var ranges = value.split(','), ahead = 0;
+                for (var i = 0; i < ranges.length; i++) {
+                    var range = /^\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*$/.exec(ranges[i]);
+                    if (!range || +range[2] < +range[1]) return 'unknown';
+                    if (+range[1] <= element.currentTime && +range[2] >= element.currentTime) ahead = Math.max(ahead, +range[2] - element.currentTime);
+                }
+                return ahead.toFixed(1);
+            }
+            function stallSnapshot(reason) {
+                lastStallSample = Date.now();
+                var stats = {}, quality = {}, transport = {};
+                try {
+                    var player = document.querySelector('.html5-video-player');
+                    if (player && player.getVideoStats) stats = player.getVideoStats() || {};
+                } catch (_) { /* Missing player statistics must not interrupt playback. */ }
+                try { if (element.getVideoPlaybackQuality) quality = element.getVideoPlaybackQuality() || {}; } catch (_) {}
+                try { if (parent.__legacyTLS) transport = parent.__legacyTLS.summary(); } catch (_) {}
+                function count(value) { return typeof value === 'number' && isFinite(value) ? value : 'unknown'; }
+                log.record('video.stall-tracks', 'reason=' + reason + '; time=' + element.currentTime.toFixed(1) +
+                    '; audioAhead=' + trackAhead(stats.lab) + '; videoAhead=' + trackAhead(stats.lvb) +
+                    '; ready=' + element.readyState + '; paused=' + !!element.paused + '; seeking=' + !!element.seeking +
+                    '; rate=' + count(element.playbackRate) + '; mediaError=' + (element.error ? element.error.code : 0) +
+                    '; trackErrors=unknown; decoded=' + count(typeof element.webkitDecodedFrameCount === 'number' ? element.webkitDecodedFrameCount : quality.totalVideoFrames) +
+                    '; dropped=' + count(typeof element.webkitDroppedFrameCount === 'number' ? element.webkitDroppedFrameCount : quality.droppedVideoFrames));
+                log.record('video.stall-network', 'active=' + count(transport.active) + '; queued=' + count(transport.queued) +
+                    '; completed=' + count(transport.completed) + '; bytes=' + count(transport.bytes) + '; transportErrors=' + count(transport.errors));
+            }
+            ['waiting', 'stalled'].forEach(function (type) {
+                listen(type, function () {
+                    followups = 5;
+                    if (Date.now() - lastStallSample >= 500) stallSnapshot(type);
+                });
+            });
+            ['loadstart', 'emptied', 'ended'].forEach(function (type) { listen(type, function () { followups = 0; }); });
+            sampleStall = function () {
+                if (followups && Date.now() - lastStallSample >= 1000) { followups--; stallSnapshot('followup'); }
+            };
             function listen(type, fn) { element.addEventListener(type, fn); listeners.push([type, fn]); }
             detachVideo = function () { listeners.forEach(function (entry) { element.removeEventListener(entry[0], entry[1]); }); };
             ['loadstart', 'waiting', 'stalled', 'seeking', 'playing', 'canplay', 'seeked', 'emptied', 'ended', 'error'].forEach(function (type) {
@@ -99,11 +140,13 @@
             log.record('video.attached', 'Media events enabled');
         }
         var sampleVideo = function () {};
+        var sampleStall = function () {};
         var lastTick = Date.now();
         setInterval(function () {
             var now = Date.now(), elapsed = now - lastTick; lastTick = now;
             if (video && !video.paused && elapsed > 1000) log.record('video.loop-delay', 'intervalMs=' + elapsed + '; lateMs=' + (elapsed - 500));
             updateStatus();
+            sampleStall();
         }, 500);
         setInterval(function () { if (video) sampleVideo(); }, 10000);
         updateStatus();
