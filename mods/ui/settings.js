@@ -17,7 +17,7 @@ export default function modernUI(update, parameters) {
             subtitle: tlsStatus,
             menuId: 'tt-tls-mode',
             menuHeader: { title: t('legacyNetwork.title'), subtitle: tlsStatus + ' · ' + t('legacyNetwork.scope') },
-            options: ['auto', '1.3', '1.2'].map(mode => ({
+            options: ['1.2', '1.3'].map(mode => ({
                 name: t('legacyNetwork.modes.' + mode.replace('.', '_')),
                 key: 'tlsMode', value: mode
             }))

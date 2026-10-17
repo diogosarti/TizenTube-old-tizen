@@ -35,3 +35,13 @@ test('Codec default matches the settings key and preserves an explicit saved pre
         assert.equal(read('preferredVideoCodec'), saved.preferredVideoCodec || 'any');
     }
 });
+
+test('TLS settings migrate saved Auto to TLS 1.2 and retain an explicit TLS 1.3 selection', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../mods/config.js'), 'utf8').replace(/^export /gm, '');
+    for (const saved of [{}, { tlsMode: 'auto' }, { tlsMode: '1.3' }]) {
+        const storage = { 'ytaf-configuration': JSON.stringify(saved) };
+        const read = vm.runInNewContext(source + '\nconfigRead;', { window: { localStorage: storage }, console: { warn() {} } });
+        assert.equal(read('tlsMode'), saved.tlsMode === '1.3' ? '1.3' : '1.2');
+        assert.equal(JSON.parse(storage['ytaf-configuration']).tlsMode, saved.tlsMode === '1.3' ? '1.3' : '1.2');
+    }
+});

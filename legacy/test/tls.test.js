@@ -8,9 +8,10 @@ const Logger = require('../web/logger');
 
 function setup(mode = 'auto', options = {}) {
     const listeners = {}, sent = [], timers = new Set();
+    const storage = { value: JSON.stringify({ tlsMode: mode }), getItem() { return this.value; }, setItem(key, value) { this.value = value; } };
     const container = { addEventListener(type, callback) { listeners[type] = callback; }, appendChild() {} };
     const win = { ArrayBuffer, Uint8Array: options.Uint8Array || Uint8Array, navigator: { userAgent: 'Synthetic test' },
-        localStorage: { getItem: () => JSON.stringify({ tlsMode: mode }) }, addEventListener() {},
+        localStorage: storage, addEventListener() {},
         document: { createElement(type) {
             if (type === 'embed') return { postMessage: value => sent.push(value) };
             let url;
@@ -29,6 +30,21 @@ function setup(mode = 'auto', options = {}) {
     message({ type: 'ready', ok: true });
     return { win, transport, sent, log, message, close() { for (const t of timers) clearTimeout(t); } };
 }
+
+test('TLS startup replaces Auto with forced TLS 1.2 before requests and preserves explicit TLS 1.3', () => {
+    for (const saved of [null, 'auto', '1.2', '1.3']) {
+        const env = setup(saved);
+        try {
+            const expected = saved === '1.3' ? '1.3' : '1.2';
+            assert.equal(env.transport.summary().mode, expected);
+            assert.equal(JSON.parse(env.win.localStorage.value).tlsMode, expected);
+            const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', 'https://www.youtube.com/tv'); xhr.send();
+            assert.equal(env.sent[0].mode, expected);
+            env.transport.setMode('auto');
+            assert.equal(env.transport.summary().mode, '1.2');
+        } finally { env.close(); }
+    }
+});
 
 test('Player transport follows successful data for the current media and ignores stale and failed streams', () => {
     const env = setup('1.3');

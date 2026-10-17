@@ -2,6 +2,7 @@
 
 ## v2.3.17 (beta)
 
+- Forced TLS 1.2 instead of Auto as a workaround for observed TLS 1.3 playback stalls; a fix is being investigated.
 - Fixed the custom playback-speed menu for YouTube's new speed icon while retaining support for the previous icon.
 - Reduced network response copying and improved incremental UTF-8 text decoding.
 - Improved XHR loading and progress event handling.

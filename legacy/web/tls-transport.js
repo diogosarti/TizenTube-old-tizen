@@ -1,7 +1,7 @@
 (function (root) {
     'use strict';
     var CONFIG_KEY = 'ytaf-configuration';
-    function validMode(value) { return value === '1.2' || value === '1.3' ? value : 'auto'; }
+    function validMode(value) { return value === '1.3' ? '1.3' : '1.2'; }
     function resolve(win, value, base) {
         value = String(value);
         if (base && !/^[a-z][a-z0-9+.-]*:/i.test(value)) {
@@ -77,10 +77,14 @@
         return result;
     }
     function create(container, log, changed) {
-        var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = 'auto';
+        var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = '1.2';
         var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 };
         var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], mediaKey = '', media = { video: 'unknown', audio: 'unknown' }, ciphers = { api: 'unknown', video: 'unknown', audio: 'unknown' }, lastNotice = '';
-        try { mode = validMode(JSON.parse(root.localStorage.getItem(CONFIG_KEY) || '{}').tlsMode); } catch (_) {}
+        try {
+            var saved = JSON.parse(root.localStorage.getItem(CONFIG_KEY) || '{}');
+            mode = validMode(saved.tlsMode);
+            if (saved.tlsMode !== mode) { saved.tlsMode = mode; root.localStorage.setItem(CONFIG_KEY, JSON.stringify(saved)); }
+        } catch (_) {}
         function notify() {
             var key = [mode, last.api, last.video, media.audio, ciphers.api, ciphers.video, ciphers.audio, ready, failed].join('|');
             if (changed && key !== lastNotice) { lastNotice = key; changed(summary()); }

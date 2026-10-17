@@ -15,7 +15,7 @@ const defaultConfig = {
   enableSponsorBlockHighlight: true,
   videoSpeed: 1,
   preferredVideoQuality: 'auto',
-  tlsMode: 'auto',
+  tlsMode: '1.2',
   showPlayerProtocol: true,
   sponsorBlockStatusDisplay: 'unavailable',
   enableDeArrow: true,
@@ -83,8 +83,8 @@ try {
 }
 
 export function configRead(key) {
-  if (key === 'tlsMode' && !['auto', '1.2', '1.3'].includes(localConfig[key])) {
-    localConfig[key] = 'auto';
+  if (key === 'tlsMode' && !['1.2', '1.3'].includes(localConfig[key])) {
+    localConfig[key] = '1.2';
     window.localStorage[CONFIG_KEY] = JSON.stringify(localConfig);
   }
   if (localConfig[key] === undefined) {

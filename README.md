@@ -2,7 +2,7 @@
 
 [README на русском](README_RU.md)
 
-This is a fork of [reisxd/TizenTube](https://github.com/reisxd/TizenTube), based on **TizenTube Standalone v2.1.1** and adapted for older Samsung TVs. Its main difference is **YouTube playback with SponsorBlock on Tizen 2.4.0**. **TLS 1.3 support is enabled for API and video requests**, with automatic TLS 1.2–1.3 negotiation by default. Later upstream module changes are also retained.
+This is a fork of [reisxd/TizenTube](https://github.com/reisxd/TizenTube), based on **TizenTube Standalone v2.1.1** and adapted for older Samsung TVs. Its main difference is **YouTube playback with SponsorBlock on Tizen 2.4.0**. **TLS 1.2 is forced by default** while observed TLS 1.3 playback stalls are investigated; TLS 1.3 remains available for manual testing. Later upstream module changes are also retained.
 
 The app runs entirely on the TV. It loads the YouTube TV interface directly and adds TizenTube modifications through a launcher adapted to the older WebKit engine. No computer, external proxy or local service is needed during viewing.
 
@@ -63,7 +63,7 @@ The manifest's Tizen 2.4 minimum is an installation requirement, not proof of co
 
 On the tested setup, QR sign-in sometimes required a second attempt in the YouTube mobile app. That phone-side behavior has not been resolved. A connection failure opens diagnostics so the load can be retried manually.
 
-HTTPS API and MSE video requests support TLS 1.3 through a bundled ARM NaCl module. Green → Network / TLS selects Auto (TLS 1.2–1.3), forced TLS 1.2 or forced TLS 1.3, and displays the negotiated version separately for API and video. Auto negotiates per connection; forced TLS 1.3 cannot reach TLS-1.2-only servers. DOM resources remain on the TV's system stack, whose TLS version is unknown. See the [TLS guide and verification notes](legacy/README.md).
+HTTPS API and MSE video requests use a bundled ARM NaCl module. Green → Network / TLS selects forced TLS 1.2 (default) or forced TLS 1.3 for manual testing, and displays the negotiated version separately for API and video. Auto is temporarily replaced with forced TLS 1.2, including previously saved Auto settings, while TLS 1.3 playback stalls are investigated. Explicit TLS 1.3 selections are preserved; that mode cannot reach TLS-1.2-only servers. Certificate and hostname verification remain enabled. DOM resources remain on the TV's system stack, whose TLS version is unknown. See the [TLS guide and verification notes](legacy/README.md).
 
 ## Upstream project
 
