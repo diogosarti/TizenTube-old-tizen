@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v2.3.18 (beta)
+
+- Fixed delayed SponsorBlock unavailability reporting by limiting segment requests to 10 seconds instead of the shared 120-second network timeout.
+- Canceled unfinished SponsorBlock segment requests when switching videos.
+
 ## v2.3.17 (beta)
 
 - Forced TLS 1.2 instead of Auto as a workaround for observed TLS 1.3 playback stalls; a fix is being investigated.

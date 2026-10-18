@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-test('SponsorBlock reports availability without a special timeout or additional requests', async () => {
+test('SponsorBlock bounds availability checking without additional requests', async () => {
     const source = fs.readFileSync(path.join(__dirname, '../../mods/features/sponsorblock.js'), 'utf8');
     const handlerSource = source.slice(source.indexOf('class SponsorBlockHandler'), source.indexOf('// When this global'));
     for (const scenario of [
@@ -35,8 +35,31 @@ test('SponsorBlock reports availability without a special timeout or additional 
         await handler.init().catch(() => {});
         assert.equal(handler.availability, scenario.availability);
         assert.equal(requests.length, 1);
-        assert.equal(requests[0].timeout, undefined);
+        assert.equal(requests[0].timeout, 10000);
     }
+});
+
+test('SponsorBlock cancels an unfinished segment request when leaving the video', async () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../mods/features/sponsorblock.js'), 'utf8');
+    let request, aborted = 0;
+    class XHR {
+        open() {}
+        send() { request = this; }
+        abort() { aborted++; this.onabort(); this.onloadend(); }
+    }
+    const Handler = vm.runInNewContext(source.slice(source.indexOf('class SponsorBlockHandler'), source.indexOf('// When this global')) + '\nSponsorBlockHandler;', {
+        XMLHttpRequest: XHR, sha256: () => 'abcd', sponsorblockAPI: 'https://example.test/api',
+        window: {}, console: { info() {} }, clearTimeout() {}
+    });
+    const handler = new Handler('synthetic');
+    const pending = handler.init();
+    assert.equal(handler.segmentRequest, request);
+    handler.destroy();
+    await pending;
+    assert.equal(aborted, 1);
+    assert.equal(handler.segmentRequest, null);
+    assert.equal(handler.active, false);
+    assert.equal(handler.segments, null);
 });
 
 test('SponsorBlock schedules only one overlay retry and cancels it when the video changes', () => {

@@ -58,6 +58,7 @@ class SponsorBlockHandler {
   video = null;
   active = true;
   availability = 'checking';
+  segmentRequest = null;
 
   attachVideoTimeout = null;
   nextSkipTimeout = null;
@@ -80,7 +81,12 @@ class SponsorBlockHandler {
   requestSegments(url) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      this.segmentRequest = xhr;
       xhr.open('GET', url);
+      // A blocked endpoint must not leave the availability indicator checking indefinitely.
+      xhr.timeout = 10000;
+      xhr.onloadend = () => { this.segmentRequest = null; };
+      xhr.onabort = () => resolve([]);
       xhr.onload = () => {
         if (xhr.status === 404) { resolve([]); return; }
         if (xhr.status < 200 || xhr.status >= 300) {
@@ -391,6 +397,10 @@ class SponsorBlockHandler {
     console.info(this.videoID, 'Destroying');
 
     this.active = false;
+    if (this.segmentRequest) {
+      this.segmentRequest.abort();
+      this.segmentRequest = null;
+    }
 
     if (this.nextSkipTimeout) {
       clearTimeout(this.nextSkipTimeout);

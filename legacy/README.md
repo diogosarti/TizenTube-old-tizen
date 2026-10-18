@@ -103,7 +103,7 @@ Local version 2.3.14 patches player-action instances without replacing YouTube's
 
 The player controls opened with Enter show the transport that delivered successful googlevideo media data, rather than the configured mode or an API connection. The indication is reset for a new media ID and ignores data from previous streams. If separately identified audio uses another transport, its value is also shown. System playback is shown as unknown.
 
-Player indicators settings can hide the playback protocol (shown by default) and show SponsorBlock availability never, only when unavailable (default), or always. Both appear in the upper-right corner with the player controls. SponsorBlock status comes from the existing segment request for the current video, without additional probes. A successful response without segments or HTTP 404 means available; network, HTTP and response parsing errors mean unavailable. Always mode also shows checking and disabled states.
+Player indicators settings can hide the playback protocol (shown by default) and show SponsorBlock availability never, only when unavailable (default), or always. Both appear in the upper-right corner with the player controls. SponsorBlock status comes from the existing segment request for the current video, without additional probes. The request times out after ten seconds and is canceled when changing videos. A successful response without segments or HTTP 404 means available; network, HTTP and response parsing errors mean unavailable. Always mode also shows checking and disabled states.
 
 ## Verified behavior
 
