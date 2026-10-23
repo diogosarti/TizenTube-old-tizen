@@ -1,5 +1,23 @@
 ﻿# Changelog
 
+## v2.3.21
+
+- Disabled extended diagnostics by default while retaining saved user preferences and the live settings toggle.
+- Fixed automatic SponsorBlock skipping when segment data arrives late or playback resumes inside a segment.
+- Replaced response-order-dependent manual SponsorBlock actions with an independent skip prompt (Yellow / 3 while the player menu is closed).
+- Fixed the watched-video filter ignoring its disabled setting and failing to filter lockupViewModel cards.
+- Restored Auto, TLS 1.2 only, and TLS 1.3 only modes, with TLS 1.2 as the default. TLS 1.3 playback stalls on the tested Tizen 2.4 TV remain under investigation; TLS 1.3 worked on another Tizen 3 TV with a different network configuration.
+
+## v2.3.20 (beta)
+
+- Added correlated XHR completion timings for response assembly and slow synchronous event handlers to investigate playback hitches after media downloads.
+
+## v2.3.19 (beta)
+
+- Added a saved Extended diagnostics toggle, currently enabled by default, with live disabling of detailed network and playback measurements.
+- Added correlated network request IDs, track and endpoint labels, native connection-stage timings and completion/cancellation diagnostics.
+- Added active-request snapshots during buffering and media pause, seek and rate-change events to diagnostics.
+
 ## v2.3.18 (beta)
 
 - Fixed delayed SponsorBlock unavailability reporting by limiting segment requests to 10 seconds instead of the shared 120-second network timeout.

@@ -354,6 +354,7 @@ test('SponsorBlock initializes in a local document and treats missing segments a
         window: { __legacyDirect: true, __legacyLog: log, addEventListener: (type, fn) => { listeners[type] = fn; } },
         document: {
             baseURI: 'https://www.youtube.com/tv', createElement: element,
+            body: element(), addEventListener() {}, removeEventListener() {},
             querySelector: selector => ({ video, '.html5-video-player': player, 'div[idomkey="slider"]': slider, 'ytlr-progress-bar': slider, 'ytlr-redux-connect-ytlr-progress-bar': container })[selector] || null
         },
         location, URL, t: key => key, sha256: () => '1234', showToast() {},
@@ -501,6 +502,7 @@ test('loading feedback follows media events and visible spinners', () => {
 
 test('Stall diagnostics distinguish track buffers, bound followups and detach on video replacement', () => {
     const events = {}, ticks = [], log = Logger.create(100);
+    let diagnosticsEnabled = true;
     let now = 1000, ranges = { lab: '0.000-30.000', lvb: '0.000-9.000,12.000-20.000', private: 'not for logging' };
     function media() {
         const listeners = {};
@@ -515,7 +517,7 @@ test('Stall diagnostics distinguish track buffers, bound followups and detach on
     let video = media();
     const window = { addEventListener: (type, fn) => { events[type] = fn; } };
     vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../web/frame.js'), 'utf8'), {
-        window, parent: { __legacyLog: log, __legacyStatus() {}, __legacyTLS: { summary: () => ({ active: 2, queued: 1, errors: 4, completed: 7, bytes: 1024 }) } },
+        window, parent: { __legacyLog: log, __legacyStatus() {}, __legacyTLS: { diagnosticsEnabled: () => diagnosticsEnabled, summary: () => ({ active: 2, queued: 1, errors: 4, completed: 7, bytes: 1024 }) } },
         LegacyLogger: Logger, Date: { now: () => now },
         document: { addEventListener() {}, querySelector: selector => selector === 'video' ? video : { getVideoStats: () => ranges }, querySelectorAll: () => [] },
         setInterval: fn => ticks.push(fn), setTimeout() {}
@@ -540,6 +542,12 @@ test('Stall diagnostics distinguish track buffers, bound followups and detach on
     ranges = null; video.fire('stalled');
     assert.match(tracks().at(-1).detail, /audioAhead=unknown; videoAhead=unknown/);
     assert.doesNotMatch(JSON.stringify(log.read()), /not for logging/);
+    diagnosticsEnabled = false;
+    const before = log.read().length;
+    video.fire('waiting'); video.fire('seeking'); now += 1000; ticks[0](); ticks[1]();
+    assert.equal(log.read().length, before, 'Disabled diagnostics must skip track snapshots, media samples and timer reports');
+    video.fire('error');
+    assert.equal(log.read().at(-1).code, 'video.error', 'Basic media errors remain available');
 });
 
 test('spatial key handler uses frame mode when parent has no navigation API', () => {

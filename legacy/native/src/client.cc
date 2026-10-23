@@ -79,12 +79,24 @@ public:
     std::string key() const { return Lower(host_) + ":" + Decimal(port_) + "|" + mode_; }
     pp::VarDictionary Diagnostics() const {
         pp::VarDictionary m; m.Set("id", id_); m.Set("operation", static_cast<int>(operation_));
+        m.Set("rid", trace_id_); m.Set("kind", track_); m.Set("endpoint", endpoint_); m.Set("itag", itag_); m.Set("host", host_);
+        m.Set("method", method_); m.Set("mode", mode_); m.Set("connectionReused", reused_);
         m.Set("received", static_cast<double>(received_)); m.Set("remaining", static_cast<double>(remaining_));
         m.Set("input", static_cast<int>(response_.size())); m.Set("output", static_cast<int>(output_.size()));
         m.Set("headers", headers_done_); m.Set("chunked", chunked_); m.Set("readPending", read_pending_); m.Set("writePending", write_pending_);
         m.Set("readCall", read_call_); m.Set("readSize", read_size_);
+        if (!diagnostics_) return m;
+        const double now = pp::Module::Get()->core()->GetTimeTicks();
+        const char* names[] = {"dns", "tcp", "tls", "send", "headers", "body"};
+        const char* timings[] = {"dnsMs", "tcpMs", "tlsMs", "sendMs", "headersMs", "bodyMs"};
+        m.Set("phase", names[phase_]); m.Set("phaseMs", (now - phase_started_) * 1000);
+        m.Set("elapsedMs", (now - started_) * 1000); m.Set("idleReadMs", (now - last_read_at_) * 1000);
+        for (int i = 0; i < 6; ++i) m.Set(timings[i], phase_ms_[i] + (i == phase_ ? (now - phase_started_) * 1000 : 0));
+        m.Set("wireReceived", static_cast<double>(wire_received_)); m.Set("wireSent", static_cast<double>(wire_sent_));
+        m.Set("readCompletions", read_completions_); m.Set("tickets", tickets_);
         return m;
     }
+    void DisableDiagnostics() { diagnostics_ = false; }
 private:
     enum Operation { Handshake, WriteRequest, ReadResponse };
     Transport* owner_;
@@ -94,8 +106,21 @@ private:
     mbedtls_ssl_context ssl_;
     z_stream inflater_;
     bool gzip_, gzip_done_, retryable_;
-    bool reusable_, reused_, media_;
+    bool reusable_, reused_, media_, diagnostics_;
     double started_, handshake_started_;
+    enum Phase { DnsPhase, TcpPhase, TlsPhase, SendPhase, HeadersPhase, BodyPhase };
+    Phase phase_;
+    double phase_started_, last_read_at_, phase_ms_[6];
+    uint64_t wire_received_, wire_sent_;
+    int read_completions_, tickets_;
+    int trace_id_, itag_;
+    std::string track_, endpoint_;
+    void SetPhase(Phase phase) {
+        if (!diagnostics_ || phase_ == phase) return;
+        const double now = pp::Module::Get()->core()->GetTimeTicks();
+        phase_ms_[phase_] += (now - phase_started_) * 1000;
+        phase_ = phase; phase_started_ = now;
+    }
     int id_, port_;
     Operation operation_;
     bool done_, write_pending_, read_pending_, flush_scheduled_, read_ready_, headers_done_, chunked_, has_length_, chunk_end_;
@@ -149,6 +174,10 @@ public:
     void HandleMessage(const pp::Var& value) override {
         if (!value.is_dictionary()) return;
         pp::VarDictionary m(value);
+        if (m.Get("type").AsString() == "diagnostic-setting") {
+            if (!m.Get("enabled").AsBool()) for (auto& entry : requests_) entry.second->DisableDiagnostics();
+            return;
+        }
         if (m.Get("type").AsString() == "inspect") {
             pp::VarArray active; uint32_t i = 0;
             for (const auto& entry : requests_) active.Set(i++, entry.second->Diagnostics());
@@ -242,6 +271,11 @@ void Request::Prepare(const pp::VarDictionary& m) {
     gzip_ = gzip_done_ = retryable_ = false;
     reused_ = reusable_; reusable_ = false;
     id_ = m.Get("id").AsInt(); port_ = m.Get("port").AsInt();
+    diagnostics_ = m.Get("diagnostics").is_bool() && m.Get("diagnostics").AsBool();
+    trace_id_ = m.Get("rid").is_int() ? m.Get("rid").AsInt() : 0;
+    itag_ = m.Get("itag").is_int() ? m.Get("itag").AsInt() : 0;
+    track_ = m.Get("kind").is_string() ? m.Get("kind").AsString() : "unknown";
+    endpoint_ = m.Get("endpoint").is_string() ? m.Get("endpoint").AsString() : "other";
     host_ = m.Get("host").AsString(); method_ = m.Get("method").AsString(); mode_ = m.Get("mode").AsString();
     media_ = host_ == "googlevideo.com" || (host_.size() > 16 && host_.compare(host_.size() - 16, 16, ".googlevideo.com") == 0);
     done_ = headers_done_ = chunked_ = has_length_ = chunk_end_ = false;
@@ -249,6 +283,11 @@ void Request::Prepare(const pp::VarDictionary& m) {
     operation_ = reused_ ? WriteRequest : Handshake;
     response_.clear(); request_.clear(); output_.clear();
     started_ = pp::Module::Get()->core()->GetTimeTicks();
+    phase_ = reused_ ? SendPhase : DnsPhase;
+    phase_started_ = last_read_at_ = started_;
+    memset(phase_ms_, 0, sizeof(phase_ms_));
+    wire_received_ = wire_sent_ = 0; read_completions_ = tickets_ = 0;
+    read_call_ = read_size_ = 0;
     memset(&inflater_, 0, sizeof(inflater_));
     std::string path = m.Get("path").AsString(), headers = m.Get("headers").AsString();
     // The bridge supplies HTTP fields, never a preformatted request line or Host.
@@ -298,12 +337,14 @@ void Request::Resolved(int32_t code) {
     Connect(address);
 }
 void Request::Connect(const pp::NetAddress& address) {
+    SetPhase(TcpPhase);
     socket_ = pp::TCPSocket(owner_);
     auto callback = callbacks_.NewOptionalCallback(&Request::Connected);
     CompleteIfSynchronous(socket_.Connect(address, callback), callback);
 }
 void Request::Connected(int32_t code) {
     if (code != PP_OK) { owner_->ForgetAddress(Lower(host_) + ":" + Decimal(port_)); FailCode("TCP", code); return; }
+    SetPhase(TlsPhase);
     handshake_started_ = pp::Module::Get()->core()->GetTimeTicks();
     int r = mbedtls_ssl_setup(&ssl_, owner_->config(mode_));
     if (!r) r = mbedtls_ssl_set_hostname(&ssl_, host_.c_str());
@@ -318,6 +359,7 @@ void Request::ReportTls(bool reused) {
     m.Set("cipher", mbedtls_ssl_get_ciphersuite(&ssl_));
     m.Set("verified", mbedtls_ssl_get_verify_result(&ssl_) == 0); m.Set("reused", reused);
     m.Set("handshakeMs", reused ? 0 : (pp::Module::Get()->core()->GetTimeTicks() - handshake_started_) * 1000);
+    if (diagnostics_) m.Set("diagnostic", Diagnostics());
     owner_->PostMessage(m);
 }
 int Request::Send(void* context, const unsigned char* bytes, size_t length) {
@@ -365,11 +407,16 @@ int Request::Receive(void* context, unsigned char* bytes, size_t length) {
     return MBEDTLS_ERR_SSL_WANT_READ;
 }
 void Request::Written(int32_t code) {
+    if (diagnostics_ && code > 0) wire_sent_ += code;
     write_pending_ = false;
     if (code <= 0) { FailCode("TCP write", code); return; }
     wire_offset_ += code; ScheduleWrite(); Drive();
 }
 void Request::Read(int32_t code) {
+    if (diagnostics_) {
+        ++read_completions_;
+        if (code > 0) { wire_received_ += code; last_read_at_ = pp::Module::Get()->core()->GetTimeTicks(); }
+    }
     read_pending_ = false; read_ready_ = true; read_result_ = code; incoming_offset_ = 0;
     if (code < 0) { FailCode("TCP read", code); return; } Drive();
 }
@@ -425,6 +472,7 @@ void Request::Finish(const std::string& error) {
     request_.clear();
     if (final_error.empty()) Flush();
     pp::VarDictionary m; m.Set("type", final_error.empty() ? "done" : "error"); m.Set("id", id_);
+    if (diagnostics_) m.Set("diagnostic", Diagnostics());
     if (!final_error.empty()) m.Set("error", final_error);
     if (!final_error.empty()) m.Set("retryable", retryable_);
     owner_->PostMessage(m); owner_->Retire(id_);
@@ -456,7 +504,12 @@ bool Request::ParseHeaders(const std::string& h) {
     }
     if (!encoding.empty() && encoding != "identity" && encoding != "gzip") { Finish("Unsupported HTTP content encoding"); return false; }
     if (!transfer.empty() && transfer != "chunked") { Finish("Unsupported HTTP transfer encoding"); return false; }
-    chunked_ = transfer == "chunked"; headers_done_ = true;
+    chunked_ = transfer == "chunked"; headers_done_ = true; SetPhase(BodyPhase);
+    if (media_) for (const auto& field : fields) if (field.first == "content-type") {
+        const std::string type = Lower(field.second);
+        if (type.compare(0, 6, "audio/") == 0) track_ = "audio";
+        else if (type.compare(0, 6, "video/") == 0) track_ = "video";
+    }
     const bool empty = method_ == "HEAD" || status == 204 || status == 304 || (!chunked_ && has_length_ && !remaining_);
     reusable_ = (h.compare(0, 9, "HTTP/1.1 ") == 0 || connection == "keep-alive") && connection.find("close") == std::string::npos && (empty || chunked_ || has_length_);
     if (encoding == "gzip" && !empty) {
@@ -471,7 +524,7 @@ bool Request::ParseHeaders(const std::string& h) {
     }
     pp::VarDictionary m; m.Set("type", "headers"); m.Set("id", id_); m.Set("status", static_cast<int>(status));
     m.Set("statusText", Trim(h.substr(12, h.find("\r\n") - 12)));
-    m.Set("headers", exposed_headers); owner_->PostMessage(m);
+    m.Set("headers", exposed_headers); if (diagnostics_) m.Set("diagnostic", Diagnostics()); owner_->PostMessage(m);
     if (empty) { Finish(""); return false; }
     return true;
 }
@@ -525,14 +578,14 @@ void Request::Drive() {
         if (operation_ == Handshake) {
             r = mbedtls_ssl_handshake(&ssl_);
             if (!r) {
-                ReportTls(false);
+                SetPhase(SendPhase); ReportTls(false);
                 if (mbedtls_ssl_get_version_number(&ssl_) == MBEDTLS_SSL_VERSION_TLS1_2) owner_->SaveSession(key(), &ssl_);
                 operation_ = WriteRequest; continue;
             }
         } else if (operation_ == WriteRequest) {
             r = mbedtls_ssl_write(&ssl_, reinterpret_cast<const unsigned char*>(request_.data() + request_offset_),
                                  std::min<size_t>(16384, request_.size() - request_offset_));
-            if (r > 0) { request_offset_ += r; if (request_offset_ == request_.size()) { request_.clear(); operation_ = ReadResponse; } continue; }
+            if (r > 0) { request_offset_ += r; if (request_offset_ == request_.size()) { request_.clear(); operation_ = ReadResponse; SetPhase(HeadersPhase); } continue; }
         } else {
             unsigned char buffer[16384]; r = mbedtls_ssl_read(&ssl_, buffer, sizeof(buffer));
             if (r > 0) { response_.append(reinterpret_cast<char*>(buffer), r); if (!ParseResponse()) return; continue; }
@@ -541,7 +594,7 @@ void Request::Drive() {
                 Finish(!headers_done_ || (chunked_ && !chunk_end_) || (has_length_ && remaining_) ? "Truncated HTTP response" : ""); return;
             }
         }
-        if (r == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) { owner_->SaveSession(key(), &ssl_); continue; }
+        if (r == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) { if (diagnostics_) ++tickets_; owner_->SaveSession(key(), &ssl_); continue; }
         if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
             // TLS 1.3 ticket processing can yield WANT_READ without invoking the
             // socket BIO. No socket completion will wake us in that case.

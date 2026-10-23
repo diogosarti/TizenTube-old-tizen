@@ -6,6 +6,9 @@
         }
     }
     var log = LegacyLogger.create(300, report);
+    function extendedDiagnostics() {
+        return !parent.__legacyTLS || !parent.__legacyTLS.diagnosticsEnabled || parent.__legacyTLS.diagnosticsEnabled();
+    }
     window.__legacyLog = log;
     window.addEventListener('error', function (event) {
         if (event.target !== window) return;
@@ -78,6 +81,7 @@
                 return ahead.toFixed(1);
             }
             function stallSnapshot(reason) {
+                if (!extendedDiagnostics()) { followups = 0; return; }
                 lastStallSample = Date.now();
                 var stats = {}, quality = {}, transport = {};
                 try {
@@ -85,7 +89,7 @@
                     if (player && player.getVideoStats) stats = player.getVideoStats() || {};
                 } catch (_) { /* Missing player statistics must not interrupt playback. */ }
                 try { if (element.getVideoPlaybackQuality) quality = element.getVideoPlaybackQuality() || {}; } catch (_) {}
-                try { if (parent.__legacyTLS) transport = parent.__legacyTLS.summary(); } catch (_) {}
+                try { if (parent.__legacyTLS) { transport = parent.__legacyTLS.summary(); parent.__legacyTLS.inspect(true); } } catch (_) {}
                 function count(value) { return typeof value === 'number' && isFinite(value) ? value : 'unknown'; }
                 log.record('video.stall-tracks', 'reason=' + reason + '; time=' + element.currentTime.toFixed(1) +
                     '; audioAhead=' + trackAhead(stats.lab) + '; videoAhead=' + trackAhead(stats.lvb) +
@@ -98,6 +102,7 @@
             }
             ['waiting', 'stalled'].forEach(function (type) {
                 listen(type, function () {
+                    if (!extendedDiagnostics()) return;
                     followups = 5;
                     if (Date.now() - lastStallSample >= 500) stallSnapshot(type);
                 });
@@ -127,16 +132,17 @@
                 }
                 return 'ready=' + element.readyState + '; network=' + element.networkState +
                     '; time=' + element.currentTime.toFixed(1) + '; buffer=' + ahead.toFixed(1) +
+                    '; paused=' + !!element.paused + '; seeking=' + !!element.seeking + '; rate=' + element.playbackRate +
                     '; size=' + element.videoWidth + 'x' + element.videoHeight +
                     '; decoded=' + element.webkitDecodedFrameCount + '; dropped=' + element.webkitDroppedFrameCount +
                     '; error=' + (element.error ? element.error.code : 0);
             }
-            ['loadedmetadata', 'playing', 'waiting', 'stalled', 'ended', 'error'].forEach(function (type) {
+            ['loadedmetadata', 'playing', 'waiting', 'stalled', 'pause', 'seeking', 'seeked', 'ratechange', 'ended', 'error'].forEach(function (type) {
                 listen(type, function () {
-                    log.record('video.' + type, state());
+                    if (type === 'error' || extendedDiagnostics()) log.record('video.' + type, state());
                 });
             });
-            sampleVideo = function () { if (!element.paused && !element.ended) log.record('video.sample', state()); };
+            sampleVideo = function () { if (extendedDiagnostics() && !element.paused && !element.ended) log.record('video.sample', state()); };
             log.record('video.attached', 'Media events enabled');
         }
         var sampleVideo = function () {};
@@ -144,7 +150,7 @@
         var lastTick = Date.now();
         setInterval(function () {
             var now = Date.now(), elapsed = now - lastTick; lastTick = now;
-            if (video && !video.paused && elapsed > 1000) log.record('video.loop-delay', 'intervalMs=' + elapsed + '; lateMs=' + (elapsed - 500));
+            if (extendedDiagnostics() && video && !video.paused && elapsed > 1000) log.record('video.loop-delay', 'intervalMs=' + elapsed + '; lateMs=' + (elapsed - 500));
             updateStatus();
             sampleStall();
         }, 500);

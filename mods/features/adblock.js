@@ -1,7 +1,7 @@
 import { configRead } from '../config.js';
 import Chapters from '../ui/chapters.js';
 import resolveCommand from '../resolveCommand.js';
-import { timelyAction, longPressData, MenuServiceItemRenderer, ShelfRenderer, TileRenderer, ButtonRenderer } from '../ui/ytUI.js';
+import { longPressData, MenuServiceItemRenderer, ShelfRenderer, TileRenderer, ButtonRenderer } from '../ui/ytUI.js';
 import { findFeedbackToken } from '../utils/innerTubeCalls.js';
 import { PatchSettings } from '../ui/customYTSettings.js';
 import { t } from 'i18next';
@@ -225,33 +225,7 @@ JSON.parse = function () {
           r.playerOverlays.playerOverlayRenderer.timelyActionRenderers.filter(a => a.timelyActionRenderer.type !== 'TIMELY_ACTION_TYPE_SHOPPING' &&
             a.timelyActionRenderer.type !== 'TIMELY_ACTION_TYPE_NFL_WATERMARK');
       } else r.playerOverlays.playerOverlayRenderer.timelyActionRenderers = [];
-      if (configRead('sponsorBlockManualSkips').length > 0) {
-        const manualSkippedSegments = configRead('sponsorBlockManualSkips');
-        if (window?.sponsorblock?.segments) {
-          for (const segment of window.sponsorblock.segments) {
-            if (manualSkippedSegments.includes(segment.category)) {
-              const timelyActionData = timelyAction(
-                t('sponsorblock.toasts.skip', { segment: t(`sponsorblock.segments.${segment.category}`) }),
-                'SKIP_NEXT',
-                {
-                  clickTrackingParams: null,
-                  showEngagementPanelEndpoint: {
-                    customAction: {
-                      action: 'SKIP',
-                      parameters: {
-                        time: segment.segment[1]
-                      }
-                    }
-                  }
-                },
-                segment.segment[0] * 1000,
-                segment.segment[1] * 1000 - segment.segment[0] * 1000
-              );
-              r.playerOverlays.playerOverlayRenderer.timelyActionRenderers.push(timelyActionData);
-            }
-          }
-        }
-      }
+
     }
 
     if (r?.transportControls?.transportControlsRenderer?.promotedActions && configRead('enableSponsorBlockHighlight')) {
@@ -612,8 +586,9 @@ function feedbackMenuItems(panel) {
 }
 
 function hideVideo(items) {
+  if (!configRead('enableHideWatchedVideos')) return items;
   return items.filter(item => {
-    if (!item.tileRenderer) return true;
+    if (!item.tileRenderer && !item.lockupViewModel) return true;
     const progressBar = item?.tileRenderer ? item.tileRenderer.header?.tileHeaderRenderer?.thumbnailOverlays?.find(overlay => overlay.thumbnailOverlayResumePlaybackRenderer)?.thumbnailOverlayResumePlaybackRenderer
     : item.lockupViewModel?.contentImage?.thumbnailViewModel?.overlays?.find(overlay => overlay.thumbnailBottomOverlayViewModel?.progressBar)?.thumbnailBottomOverlayViewModel?.progressBar. thumbnailOverlayProgressBarViewModel;
     if (!progressBar) return true;

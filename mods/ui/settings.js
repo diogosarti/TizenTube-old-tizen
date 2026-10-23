@@ -11,13 +11,18 @@ export default function modernUI(update, parameters) {
     const tlsStatus = tls ? t('legacyNetwork.status', { api: tls.api, video: tls.video }) : '';
     const settings = [
         tls ? {
+            name: t('legacyNetwork.extendedDiagnostics'),
+            icon: 'SETTINGS',
+            value: 'extendedDiagnostics'
+        } : null,
+        tls ? {
             name: t('legacyNetwork.title'),
             icon: 'SETTINGS',
             value: null,
             subtitle: tlsStatus,
             menuId: 'tt-tls-mode',
             menuHeader: { title: t('legacyNetwork.title'), subtitle: tlsStatus + ' · ' + t('legacyNetwork.scope') },
-            options: ['1.2', '1.3'].map(mode => ({
+            options: ['auto', '1.2', '1.3'].map(mode => ({
                 name: t('legacyNetwork.modes.' + mode.replace('.', '_')),
                 key: 'tlsMode', value: mode
             }))

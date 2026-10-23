@@ -116,6 +116,52 @@ test('SponsorBlock waits for playback to reach the segment and reschedules for p
     video.seeking = false; listeners.get('seeked')();
     video.currentTime = 105; fireTimer();
     assert.deepEqual(seeks, [120], 'Skip only after reaching the segment');
+    video.currentTime = 110;
+    handler.segments[0].UUID = 'late-synthetic';
+    handler.scheduleSkip();
+    assert.equal(timers.values().next().value.delay, 0);
+    fireTimer();
+    assert.deepEqual(seeks, [120, 120], 'Late data or resume inside a segment must still skip');
     handler.destroy();
     assert.equal(timers.size, 0); assert.equal(listeners.size, 0);
+});
+
+test('Manual SponsorBlock prompt uses late segments and ignores keys after leaving the video', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../mods/features/sponsorblock.js'), 'utf8');
+    let keyHandler, removed = false;
+    const button = { style: {}, remove() { removed = true; } }, seeks = [];
+    const Handler = vm.runInNewContext(source.slice(source.indexOf('class SponsorBlockHandler'), source.indexOf('// When this global')) + '\nSponsorBlockHandler;', {
+        window: { __legacyDirect: true }, t: value => value, clearTimeout() {}, console: { info() {} },
+        document: { createElement: () => button, body: { appendChild() {} },
+            addEventListener(type, fn) { keyHandler = fn; }, removeEventListener() {},
+            querySelector: selector => selector === '.html5-video-player' ? { seekTo: target => seeks.push(target) } : null }
+    });
+    const handler = new Handler('synthetic');
+    handler.video = { currentTime: 12, duration: 100, removeEventListener() {} };
+    handler.skippableCategories = ['intro']; handler.manualSkippableCategories = ['intro'];
+    handler.installManualSkip();
+    assert.equal(button.style.display, 'none');
+    handler.segments = [{ category: 'intro', segment: [10, 30] }];
+    handler.updateManualSkip();
+    assert.equal(button.style.display, 'block');
+    const event = { keyCode: 405, preventDefault() {}, stopImmediatePropagation() {} };
+    keyHandler(event); assert.deepEqual(seeks, [30]);
+    handler.destroy(); keyHandler(event);
+    assert.deepEqual(seeks, [30]); assert.equal(removed, true);
+});
+
+test('Watched filtering honors its switch and handles both video card formats', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../mods/features/adblock.js'), 'utf8');
+    const config = { enableHideWatchedVideos: false, hideWatchedVideosPages: ['home'], hideWatchedVideosThreshold: 80 };
+    const hide = vm.runInNewContext(source.slice(source.indexOf('function hideVideo(items)')) + '\nhideVideo;', {
+        configRead: key => config[key], location: { hash: '#/' }
+    });
+    const cards = [
+        { tileRenderer: { header: { tileHeaderRenderer: { thumbnailOverlays: [{ thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: 95 } }] } } } },
+        { lockupViewModel: { contentImage: { thumbnailViewModel: { overlays: [{ thumbnailBottomOverlayViewModel: { progressBar: { thumbnailOverlayProgressBarViewModel: { startPercent: 95 } } } }] } } } },
+        { other: true }
+    ];
+    assert.equal(hide(cards), cards);
+    config.enableHideWatchedVideos = true;
+    assert.deepEqual(Array.from(hide(cards)), [cards[2]]);
 });

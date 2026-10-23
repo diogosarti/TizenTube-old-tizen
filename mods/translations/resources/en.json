@@ -1,5 +1,6 @@
 {
   "legacyNetwork": {
+    "extendedDiagnostics": "Extended diagnostics",
     "title": "TLS connection",
     "status": "Interface/API (NaCl): {{api}} · Video (NaCl): {{video}} · System: unknown",
     "scope": "Applies to new NaCl HTTPS requests. Restart playback to replace existing connections. System resource TLS is unknown.",
@@ -28,6 +29,7 @@
             },
             "adBlock": "Ad Block",
             "sponsorblock": {
+    "manualKey": "Yellow / 3",
                 "title": "SponsorBlock Settings",
                 "options": {
                     "enableSB": "Enable SponsorBlock",

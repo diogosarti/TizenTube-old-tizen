@@ -6,9 +6,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const Logger = require('../web/logger');
 
-function setup(mode = 'auto', options = {}) {
+function setup(mode = 'auto', options = { extendedDiagnostics: true }) {
     const listeners = {}, sent = [], timers = new Set();
-    const storage = { value: JSON.stringify({ tlsMode: mode }), getItem() { return this.value; }, setItem(key, value) { this.value = value; } };
+    const diagnosticSetting = Object.prototype.hasOwnProperty.call(options, 'extendedDiagnostics') ? options.extendedDiagnostics : true;
+    const storage = { value: JSON.stringify({ tlsMode: mode, extendedDiagnostics: diagnosticSetting }), getItem() { return this.value; }, setItem(key, value) { this.value = value; } };
     const container = { addEventListener(type, callback) { listeners[type] = callback; }, appendChild() {} };
     const win = { ArrayBuffer, Uint8Array: options.Uint8Array || Uint8Array, navigator: { userAgent: 'Synthetic test' },
         localStorage: storage, addEventListener() {},
@@ -31,19 +32,143 @@ function setup(mode = 'auto', options = {}) {
     return { win, transport, sent, log, message, close() { for (const t of timers) clearTimeout(t); } };
 }
 
-test('TLS startup replaces Auto with forced TLS 1.2 before requests and preserves explicit TLS 1.3', () => {
+test('TLS startup defaults to TLS 1.2 and preserves all three explicit modes', () => {
     for (const saved of [null, 'auto', '1.2', '1.3']) {
         const env = setup(saved);
         try {
-            const expected = saved === '1.3' ? '1.3' : '1.2';
+            const expected = saved === 'auto' || saved === '1.3' ? saved : '1.2';
             assert.equal(env.transport.summary().mode, expected);
             assert.equal(JSON.parse(env.win.localStorage.value).tlsMode, expected);
             const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', 'https://www.youtube.com/tv'); xhr.send();
             assert.equal(env.sent[0].mode, expected);
             env.transport.setMode('auto');
-            assert.equal(env.transport.summary().mode, '1.2');
+            assert.equal(env.transport.summary().mode, 'auto');
         } finally { env.close(); }
     }
+});
+
+test('Extended diagnostics default to off and preserve an explicit saved choice', () => {
+    for (const saved of [undefined, false, true]) {
+        const env = setup('1.2', { extendedDiagnostics: saved });
+        try {
+            assert.equal(env.transport.diagnosticsEnabled(), saved === true);
+            const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', 'https://www.youtube.com/tv'); xhr.send();
+            assert.equal(env.sent[0].diagnostics, saved === true);
+        } finally { env.close(); }
+    }
+});
+
+test('Extended diagnostics honor the saved setting and can be toggled without interrupting playback', () => {
+    const env = setup('1.2', { extendedDiagnostics: false });
+    try {
+        assert.equal(env.transport.diagnosticsEnabled(), false);
+        const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', 'https://media.googlevideo.com/videoplayback'); xhr.send();
+        const request = env.sent.at(-1);
+        assert.equal(request.diagnostics, false);
+        env.transport.inspect(true);
+        assert.equal(env.sent.some(m => m.type === 'inspect'), false);
+        env.message({ type: 'headers', id: request.id, status: 200, headers: '' });
+        env.message({ type: 'data', id: request.id, body: Uint8Array.from([1]).buffer });
+        env.message({ type: 'done', id: request.id });
+        assert.equal(xhr.readyState, 4); assert.equal(xhr.responseText.length, 1);
+        assert.equal(env.log.read().some(e => /^net\./.test(e.code)), false);
+        env.transport.setDiagnostics(true);
+        xhr.open('GET', 'https://www.youtube.com/tv'); xhr.send();
+        assert.equal(env.sent.at(-1).diagnostics, true);
+        assert.ok(env.log.read().some(e => e.code === 'net.start'));
+        env.transport.setDiagnostics(false);
+        assert.equal(env.sent.at(-1).type, 'diagnostic-setting'); assert.equal(env.sent.at(-1).enabled, false);
+        const before = env.log.read().length;
+        xhr.abort();
+        assert.equal(env.log.read().length, before);
+        assert.equal(env.transport.summary().active, 0);
+    } finally { env.close(); }
+});
+
+test('XHR completion diagnostics separate assembly from slow event callbacks and preserve request identity on reentry', () => {
+    let now = 1000;
+    function MeasuredArray(value) { if (typeof value === 'number') now += 120; return new Uint8Array(value); }
+    const env = setup('1.3', { Date: { now: () => now }, Uint8Array: MeasuredArray });
+    try {
+        const xhr = new env.win.XMLHttpRequest(); xhr.responseType = 'arraybuffer';
+        xhr.open('GET', 'https://media.googlevideo.com/videoplayback'); xhr.send();
+        const request = env.sent[0];
+        env.message({ type: 'headers', id: request.id, status: 200, headers: '' });
+        for (let i = 0; i < 2; i++) env.message({ type: 'data', id: request.id, body: Uint8Array.from([65]).buffer });
+        xhr.onprogress = () => { now += 250; };
+        xhr.onreadystatechange = () => { if (xhr.readyState === 4) now += 500; };
+        xhr.onload = () => { now += 700; };
+        xhr.onloadend = () => { now += 110; xhr.open('GET', 'https://www.youtube.com/next'); };
+        env.message({ type: 'done', id: request.id });
+        const records = env.log.read();
+        assert.match(records.find(e => e.code === 'net.xhr-done').detail, /rid=1; id=1; bytes=2; chunks=2; assembleMs=120; elapsedMs=1680/);
+        const events = records.filter(e => e.code === 'net.xhr-event');
+        assert.equal(events.length, 4);
+        assert.ok(events.every(e => e.detail.startsWith('rid=1; id=1;')));
+        assert.match(events.find(e => /event=load;/.test(e.detail)).detail, /elapsedMs=700/);
+        assert.equal(xhr.readyState, 1, 'Logging must preserve reopening from loadend');
+    } finally { env.close(); }
+});
+
+test('Network diagnostics correlate track, request stages and completion without saving URLs or credentials', () => {
+    let now = 1000;
+    const env = setup('1.2', { Date: { now: () => now } });
+    try {
+        const xhr = new env.win.XMLHttpRequest();
+        xhr.open('GET', 'https://media.googlevideo.com/videoplayback?itag=140&mime=audio%2Fmp4&token=synthetic-private');
+        xhr.setRequestHeader('Authorization', 'Bearer synthetic-private'); xhr.responseType = 'arraybuffer'; xhr.send();
+        const request = env.sent[0];
+        assert.equal(request.rid, request.id); assert.equal(request.kind, 'audio'); assert.equal(request.itag, 140);
+        assert.equal(request.endpoint, 'videoplayback');
+        const diagnostic = { id: request.id, rid: request.rid, kind: request.kind, host: request.host, endpoint: request.endpoint,
+            phase: 'body', dnsMs: 2, tcpMs: 5, tlsMs: 12, sendMs: 1, headersMs: 50, wireReceived: 100, readCompletions: 3 };
+        env.message({ type: 'headers', id: request.id, status: 206, headers: 'Content-Type: audio/mp4\r\n', diagnostic });
+        const chunk = Uint8Array.from([1]).buffer;
+        for (let i = 0; i < 10; i++) env.message({ type: 'data', id: request.id, body: chunk });
+        assert.equal(env.log.read().filter(e => e.code === 'net.first-data').length, 1);
+        assert.equal(env.log.read().filter(e => e.code === 'net.progress').length, 0);
+        now += 1000; env.message({ type: 'data', id: request.id, body: chunk });
+        assert.equal(env.log.read().filter(e => e.code === 'net.progress').length, 1);
+        env.message({ type: 'done', id: request.id, diagnostic });
+        assert.match(env.log.read().find(e => e.code === 'net.end').detail, /reason=done; bytes=11; status=206/);
+        assert.match(env.log.read().find(e => e.code === 'net.timing').detail, /dnsMs=2; tcpMs=5; tlsMs=12/);
+        const before = env.log.read().length;
+        env.message({ type: 'diagnostics', requests: [diagnostic] }); env.transport.inspect();
+        assert.equal(env.log.read().length, before, 'Inspection must not create duplicate lifecycle events');
+        env.transport.inspect(true); env.message({ type: 'diagnostics', requests: [diagnostic] });
+        assert.match(env.log.read().find(e => e.code === 'net.pending').detail, /kind=audio.*phase=body/);
+        const text = JSON.stringify(env.log.read());
+        assert.doesNotMatch(text, /synthetic-private|Bearer|https?:|mime=|token=/);
+
+        const api = new env.win.XMLHttpRequest(); api.open('GET', 'https://api/stats/example_ping?private=synthetic-private'); api.send();
+        const apiRequest = env.sent.at(-1);
+        assert.equal(apiRequest.kind, 'api'); assert.equal(apiRequest.endpoint, 'example_ping');
+        api.abort();
+        assert.match(env.log.read().filter(e => e.code === 'net.end').at(-1).detail, /host=api; endpoint=example_ping.*reason=abort/);
+    } finally { env.close(); }
+});
+
+test('Network diagnostics preserve a logical ID across redirects and distinguish XHR timeout from native abort', async () => {
+    const env = setup();
+    try {
+        const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', 'https://www.youtube.com/start'); xhr.send();
+        const first = env.sent[0];
+        env.message({ type: 'headers', id: first.id, status: 302, headers: 'Location: https://www.youtube.com/next\r\n' });
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const next = env.sent.filter(m => m.type === 'request').at(-1);
+        assert.notEqual(next.id, first.id); assert.equal(next.rid, first.rid);
+        xhr.abort();
+        const timeout = new env.win.XMLHttpRequest(); timeout.open('GET', 'https://media.googlevideo.com/videoplayback?mime=video%2Fmp4&itag=137');
+        timeout.timeout = 5; timeout.send();
+        const request = env.sent.filter(m => m.type === 'request').at(-1);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        assert.match(env.log.read().filter(e => e.code === 'net.end').at(-1).detail, /kind=video.*reason=timeout/);
+        env.message({ type: 'error', id: request.id, error: 'abort', diagnostic: {
+            id: request.id, rid: request.rid, kind: request.kind, host: request.host, endpoint: request.endpoint, phase: 'tls', tlsMs: 25
+        } });
+        assert.match(env.log.read().find(e => e.code === 'net.native-end').detail, /kind=video.*phase=tls; reason=abort/);
+        assert.equal(env.transport.summary().active, 0);
+    } finally { env.close(); }
 });
 
 test('Player transport follows successful data for the current media and ignores stale and failed streams', () => {

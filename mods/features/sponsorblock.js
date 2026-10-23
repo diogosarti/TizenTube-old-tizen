@@ -73,6 +73,8 @@ class SponsorBlockHandler {
   skippableCategories = [];
   manualSkippableCategories = [];
   skippedCategories = new Map();
+  manualButton = null;
+  manualKeyHandler = null;
 
   constructor(videoID) {
     this.videoID = videoID;
@@ -146,6 +148,7 @@ class SponsorBlockHandler {
     this.durationChangeHandler = () => this.buildOverlay();
 
     this.attachVideo();
+    this.installManualSkip();
     this.buildOverlay();
   }
 
@@ -295,6 +298,7 @@ class SponsorBlockHandler {
   }
 
   scheduleSkip() {
+    this.updateManualSkip();
     clearTimeout(this.nextSkipTimeout);
     this.nextSkipTimeout = null;
 
@@ -313,8 +317,9 @@ class SponsorBlockHandler {
     // and, in worst case, perform a skip at negative interval (immediately)...
     const nextSegments = this.segments.filter(
       (seg) =>
-        seg.segment[0] > this.video.currentTime - 0.3 &&
-        seg.segment[1] > this.video.currentTime - 0.3
+        seg.segment[1] > this.video.currentTime &&
+        this.skippableCategories.includes(seg.category) &&
+        !this.manualSkippableCategories.includes(seg.category)
     );
     nextSegments.sort((s1, s2) => s1.segment[0] - s2.segment[0]);
 
@@ -393,10 +398,49 @@ class SponsorBlockHandler {
     }, Math.max(0, (start - this.video.currentTime) * 1000 / this.video.playbackRate));
   }
 
+  currentManualSegment() {
+    if (!this.active || !this.video || this.video.seeking) return null;
+    return (this.segments || []).find(seg => this.skippableCategories.includes(seg.category) &&
+      this.manualSkippableCategories.includes(seg.category) &&
+      seg.segment[0] <= this.video.currentTime && seg.segment[1] > this.video.currentTime);
+  }
+
+  installManualSkip() {
+    this.manualButton = document.createElement('button');
+    this.manualButton.style.cssText = 'display:none;position:fixed;right:4rem;bottom:10rem;z-index:10000;background:#222;color:white;border:2px solid #ffd600;padding:0.7rem;font-size:1.2rem';
+    const skip = () => {
+      const segment = this.currentManualSegment();
+      if (!segment) return;
+      const target = this.video.duration - segment.segment[1] < 1 ? segment.segment[1] - 1 : segment.segment[1];
+      if (window.__legacyDirect) document.querySelector('.html5-video-player').seekTo(target, true);
+      else this.video.currentTime = target;
+      this.manualButton.style.display = 'none';
+    };
+    this.manualButton.onclick = skip;
+    this.manualKeyHandler = event => {
+      if ((event.keyCode === 405 || event.keyCode === 51) && this.currentManualSegment() &&
+          !document.querySelector('div[idomkey="Metadata-Section"]')) {
+        event.preventDefault(); event.stopImmediatePropagation(); skip();
+      }
+    };
+    document.addEventListener('keydown', this.manualKeyHandler, true);
+    document.body.appendChild(this.manualButton);
+    this.updateManualSkip();
+  }
+
+  updateManualSkip() {
+    if (!this.manualButton) return;
+    const segment = this.currentManualSegment();
+    this.manualButton.style.display = segment ? 'block' : 'none';
+    if (segment) this.manualButton.textContent = t('sponsorblock.manualKey') + ': ' + t('sponsorblock.toasts.skip', { segment: t(`sponsorblock.segments.${segment.category}`) });
+  }
+
   destroy() {
     console.info(this.videoID, 'Destroying');
 
     this.active = false;
+    if (this.manualKeyHandler) document.removeEventListener('keydown', this.manualKeyHandler, true);
+    if (this.manualButton) { this.manualButton.remove(); this.manualButton = null; }
     if (this.segmentRequest) {
       this.segmentRequest.abort();
       this.segmentRequest = null;

@@ -1,5 +1,6 @@
 {
   "legacyNetwork": {
+    "extendedDiagnostics": "Расширенная диагностика",
     "title": "Соединение TLS",
     "status": "Интерфейс/API (NaCl): {{api}} · Видео (NaCl): {{video}} · Системный стек: неизвестно",
     "scope": "Для новых HTTPS-запросов NaCl. Перезапустите видео для смены соединений. TLS системных ресурсов неизвестен.",
@@ -28,6 +29,7 @@
             },
             "adBlock": "Блокировка рекламы",
             "sponsorblock": {
+    "manualKey": "Жёлтая / 3",
                 "title": "Настройки SponsorBlock",
                 "options": {
                     "enableSB": "Включить SponsorBlock",

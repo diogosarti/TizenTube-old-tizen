@@ -14,11 +14,18 @@ test('recorder keeps playback diagnostics without arbitrary player or account fi
         logs: [{ n: 1, code: 'tls.request-error', detail: 'https://example.test/v?token=secret' },
             { n: 2, code: 'page.error', detail: 'private account message' }],
         stats: { lvb: '0.0-20.0', fmt: '299', docid: 'private', lab: 'https://example.test/private' },
+        native: [{ id: 9, rid: 7, itag: 140, kind: 'audio', host: 'rr1---synthetic.googlevideo.com', endpoint: 'videoplayback',
+            phase: 'headers', phaseMs: 1234, wireReceived: 1024, readCompletions: 2, cookie: 'private', url: 'https://example.test/private' }],
         tls: { video: 'TLS 1.3', bytes: 4096, cookie: 'private' }, account: 'private' });
     assert.equal(result.video.time, 12);
     assert.deepEqual(result.video.buffered, [[0, 20]]);
     assert.equal(result.stats.lvb, '0.0-20.0');
     assert.equal(result.tls.video, 'TLS 1.3');
+    assert.equal(result.native[0].rid, 7);
+    assert.equal(result.native[0].kind, 'audio');
+    assert.equal(result.native[0].phase, 'headers');
+    assert.equal(result.native[0].phaseMs, 1234);
+    assert.equal(result.native[0].host, 'rr1---synthetic.googlevideo.com');
     assert.doesNotMatch(JSON.stringify(result), /private|example\.test|secret/);
 });
 

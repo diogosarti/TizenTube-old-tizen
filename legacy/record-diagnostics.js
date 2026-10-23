@@ -59,10 +59,17 @@ function sanitize(s) {
     out.tls = {};
     out.native = (Array.isArray(s.native) ? s.native : []).slice(0, 32).map(request => {
         const result = {};
-        for (const k of ['id', 'operation', 'received', 'remaining', 'input', 'output', 'readCall', 'readSize']) {
+        for (const k of ['id', 'rid', 'itag', 'operation', 'received', 'remaining', 'input', 'output', 'readCall', 'readSize',
+            'phaseMs', 'elapsedMs', 'idleReadMs', 'dnsMs', 'tcpMs', 'tlsMs', 'sendMs', 'headersMs', 'bodyMs', 'wireReceived', 'wireSent', 'readCompletions', 'tickets']) {
             if (Number.isFinite(request[k])) result[k] = request[k];
         }
-        for (const k of ['headers', 'chunked', 'readPending', 'writePending']) result[k] = request[k] === true;
+        for (const k of ['headers', 'chunked', 'readPending', 'writePending', 'connectionReused']) result[k] = request[k] === true;
+        if (/^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$/.test(request.method)) result.method = request.method;
+        if (/^(auto|1\.2|1\.3)$/.test(request.mode)) result.mode = request.mode;
+        if (/^(api|audio|video|unknown)$/.test(request.kind)) result.kind = request.kind;
+        if (/^(dns|tcp|tls|send|headers|body)$/.test(request.phase)) result.phase = request.phase;
+        if (typeof request.endpoint === 'string' && /^[a-zA-Z_]{1,32}$/.test(request.endpoint)) result.endpoint = request.endpoint;
+        if (typeof request.host === 'string' && /^(?:[a-zA-Z0-9-]+\.)*(?:youtube\.com|googlevideo\.com|googleapis\.com|google\.com|gstatic\.com|ajay\.app)$|^(?:api|localhost)$/.test(request.host)) result.host = request.host;
         return result;
     });
     for (const k of ['active', 'queued', 'completed', 'bytes', 'errors']) {

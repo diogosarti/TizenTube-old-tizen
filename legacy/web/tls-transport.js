@@ -1,7 +1,7 @@
 (function (root) {
     'use strict';
     var CONFIG_KEY = 'ytaf-configuration';
-    function validMode(value) { return value === '1.3' ? '1.3' : '1.2'; }
+    function validMode(value) { return value === 'auto' || value === '1.3' ? value : '1.2'; }
     function resolve(win, value, base) {
         value = String(value);
         if (base && !/^[a-z][a-z0-9+.-]*:/i.test(value)) {
@@ -78,11 +78,12 @@
     }
     function create(container, log, changed) {
         var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = '1.2';
-        var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 };
-        var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], mediaKey = '', media = { video: 'unknown', audio: 'unknown' }, ciphers = { api: 'unknown', video: 'unknown', audio: 'unknown' }, lastNotice = '';
+        var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 }, extendedDiagnostics = false;
+        var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], logDiagnosticReply = false, mediaKey = '', media = { video: 'unknown', audio: 'unknown' }, ciphers = { api: 'unknown', video: 'unknown', audio: 'unknown' }, lastNotice = '';
         try {
             var saved = JSON.parse(root.localStorage.getItem(CONFIG_KEY) || '{}');
             mode = validMode(saved.tlsMode);
+            extendedDiagnostics = saved.extendedDiagnostics === true;
             if (saved.tlsMode !== mode) { saved.tlsMode = mode; root.localStorage.setItem(CONFIG_KEY, JSON.stringify(saved)); }
         } catch (_) {}
         function notify() {
@@ -97,6 +98,30 @@
         function record(group, tls) {
             last[group] = tls;
             stats[group][tls] = (stats[group][tls] || 0) + 1; notify();
+        }
+        function endpoint(u) {
+            if (u.pathname === '/videoplayback') return 'videoplayback';
+            var known = /^\/(?:api\/)?stats\/([a-z_]{1,32})$/.exec(u.pathname) || /^\/youtubei\/v1\/([a-z_]{1,32})$/.exec(u.pathname);
+            if (known) return known[1];
+            if (/^\/api\/skipSegments(?:\/|$)/.test(u.pathname)) return 'skipSegments';
+            if (u.pathname === '/api/branding') return 'branding';
+            if (/^\/api\/lounge\//.test(u.pathname)) return 'lounge';
+            return u.pathname === '/tv' ? 'document' : 'other';
+        }
+        function identity(r) {
+            return 'rid=' + r.trace + '; id=' + r.id + '; kind=' + r.track + '; host=' + r.parsed.hostname +
+                '; endpoint=' + endpoint(r.parsed) + '; method=' + r.method + '; itag=' + r.itag + '; mode=' + r.mode;
+        }
+        function trace(r, event, detail) {
+            if (!extendedDiagnostics) return;
+            log.record(event, identity(r) + '; ageMs=' + (Date.now() - r.createdAt) + '; ' + detail);
+        }
+        function nativeTiming(d) {
+            if (!extendedDiagnostics || !d) return;
+            var fields = ['elapsedMs', 'dnsMs', 'tcpMs', 'tlsMs', 'sendMs', 'headersMs', 'bodyMs', 'wireReceived', 'wireSent', 'readCompletions', 'tickets'];
+            var detail = 'rid=' + d.rid + '; id=' + d.id;
+            fields.forEach(function (key) { if (typeof d[key] === 'number') detail += '; ' + key + '=' + Math.round(d[key]); });
+            log.record('net.timing', detail);
         }
         function pump() {
             if (!ready || failed) return;
@@ -114,9 +139,12 @@
                 active++; r.active = true;
                 var u = r.parsed, lines = '', h = r.headers;
                 log.record('tls.queue', r.group + '; waitMs=' + (Date.now() - r.queuedAt));
+                r.received = 0; r.status = 0; r.lastProgress = Date.now();
+                trace(r, 'net.start', 'waitMs=' + (Date.now() - r.queuedAt));
                 for (var key in h) if (Object.prototype.hasOwnProperty.call(h, key)) lines += key + ': ' + h[key] + '\r\n';
                 if (!h['user-agent']) lines += 'User-Agent: ' + root.navigator.userAgent + '\r\n';
                 module.postMessage({ type: 'request', id: r.id, method: r.method, host: u.hostname,
+                    diagnostics: extendedDiagnostics, rid: r.trace, kind: r.track, endpoint: extendedDiagnostics ? endpoint(u) : '', itag: r.itag,
                     port: +(u.port || 443), path: (u.pathname.charAt(0) === '/' ? u.pathname : '/' + u.pathname) + u.search,
                     headers: lines, body: r.body, mode: r.mode, freshConnection: r.retries > 0 });
             }
@@ -127,14 +155,16 @@
             queue = queue.filter(function (item) { return item !== r; });
             setTimeout(pump, 0);
         }
-        function abort(r) {
+        function abort(r, reason) {
             if (!r || !requests[r.id]) return;
+            trace(r, 'net.end', 'reason=' + (reason || 'abort') + '; bytes=' + (r.received || 0) + '; status=' + (r.status || 0));
             if (r.active) module.postMessage({ type: 'abort', id: r.id });
             remove(r); r.callback = null;
         }
         function requeue(r) {
             delete requests[r.id]; active--; r.active = false;
             r.id = ++sequence; r.queuedAt = Date.now(); r.mediaRecorded = false; requests[r.id] = r; queue.push(r); setTimeout(pump, 0);
+            trace(r, 'net.queued', 'attempt=requeued');
         }
         function request(method, url, h, body, callback) {
             var u = resolve(root, url);
@@ -142,49 +172,77 @@
                 background: (/^sponsor\.ajay\.app$/i.test(u.hostname) && u.pathname === '/api/branding') ||
                     (/(^|\.)youtube\.com$/i.test(u.hostname) && /^\/(api\/stats\/|ptracking(?:\?|$)|generate_204|youtubei\/v1\/log_event)/.test(u.pathname) &&
                     !/^\/api\/stats\/(playback|watchtime)$/.test(u.pathname)) };
-            var key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search);
+            var key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search), itag = /(?:[?&])itag=(\d{1,5})(?:&|$)/.exec(u.search);
+            r.trace = r.id; r.createdAt = r.queuedAt; r.itag = itag ? +itag[1] : 0;
+            r.track = r.group === 'api' ? 'api' : mime && /^audio(?:%2f|\/)/i.test(mime[1]) ? 'audio' : mime && /^video(?:%2f|\/)/i.test(mime[1]) ? 'video' : 'unknown';
             if (r.group === 'video' && u.pathname === '/videoplayback') {
                 r.mediaKey = key ? key[1] : mediaKey;
                 r.mediaKind = mime && /^audio(?:%2f|\/)/i.test(mime[1]) ? 'audio' : 'video';
                 if (r.mediaKey !== mediaKey) { mediaKey = r.mediaKey; media = { video: 'unknown', audio: 'unknown' }; last.video = 'unknown'; ciphers.video = ciphers.audio = 'unknown'; notify(); }
             }
             requests[r.id] = r; queue.push(r);
-            if (failed) setTimeout(function () { remove(r); callback({ type: 'error', error: 'NaCl transport unavailable' }); }, 0);
+            trace(r, 'net.queued', 'attempt=initial');
+            if (failed) setTimeout(function () { trace(r, 'net.end', 'reason=module-unavailable'); remove(r); callback({ type: 'error', error: 'NaCl transport unavailable' }); }, 0);
             else pump();
             return r;
         }
         function moduleFailure() {
             if (failed) return;
             failed = true; ready = false; log.record('tls.module-error', 'NaCl transport unavailable');
-            Object.keys(requests).forEach(function (id) { var r = requests[id]; remove(r); if (r.callback) r.callback({ type: 'error', error: 'NaCl transport unavailable' }); });
+            Object.keys(requests).forEach(function (id) { var r = requests[id]; trace(r, 'net.end', 'reason=module-unavailable'); remove(r); if (r.callback) r.callback({ type: 'error', error: 'NaCl transport unavailable' }); });
             notify();
         }
         container.addEventListener('message', function (event) {
             var m = event.data;
             if (!m || typeof m !== 'object') return;
-            if (m.type === 'diagnostics') { diagnostics = m.requests; return; }
+            if (m.type === 'diagnostics') {
+                diagnostics = m.requests;
+                if (extendedDiagnostics && logDiagnosticReply) {
+                    logDiagnosticReply = false;
+                    diagnostics.forEach(function (d) {
+                        log.record('net.pending', 'rid=' + d.rid + '; id=' + d.id + '; kind=' + d.kind + '; host=' + d.host +
+                            '; endpoint=' + d.endpoint + '; itag=' + d.itag + '; phase=' + d.phase + '; phaseMs=' + Math.round(d.phaseMs) +
+                            '; received=' + d.received + '; wireReceived=' + d.wireReceived + '; idleReadMs=' + Math.round(d.idleReadMs) +
+                            '; readPending=' + !!d.readPending + '; tickets=' + d.tickets);
+                    });
+                }
+                return;
+            }
             if (m.type === 'ready') {
                 ready = !!m.ok;
                 if (!ready) { log.record('tls.module-init', 'code=' + m.code); moduleFailure(); return; }
                 log.record('tls.ready', 'Mbed TLS 3.6.7; certificate and hostname verification required'); pump(); return;
             }
-            var r = requests[m.id]; if (!r || !r.callback) return;
+            var r = requests[m.id];
+            if (!r || !r.callback) {
+                if (extendedDiagnostics && m.diagnostic && (m.type === 'done' || m.type === 'error')) {
+                    var d = m.diagnostic;
+                    log.record('net.native-end', 'rid=' + d.rid + '; id=' + m.id + '; kind=' + d.kind + '; host=' + d.host + '; endpoint=' + d.endpoint + '; phase=' + d.phase + '; reason=' + (m.error || 'done'));
+                    nativeTiming(d);
+                }
+                return;
+            }
             if (m.type === 'tls') {
-                if (!m.verified) { var rejected = r.callback; abort(r); rejected({ type: 'error', error: 'Certificate verification failed' }); return; }
+                if (!m.verified) { var rejected = r.callback; abort(r, 'certificate-rejected'); rejected({ type: 'error', error: 'Certificate verification failed' }); return; }
                 r.transport = m.tls.replace('TLSv', 'TLS ');
                 r.cipher = m.cipher || 'unknown';
                 if (r.group === 'api') ciphers.api = r.cipher;
                 if (r.group !== 'video') record(r.group, r.transport);
-                log.record('tls.connection', r.group + '; ' + m.tls + '; cipher=' + r.cipher + '; verified=true; mode=' + r.mode + '; reused=' + !!m.reused + '; handshakeMs=' + Math.round(m.handshakeMs || 0));
+                log.record('tls.connection', r.group + '; ' + m.tls + '; cipher=' + r.cipher + '; verified=true; mode=' + r.mode + '; reused=' + !!m.reused + '; handshakeMs=' + Math.round(m.handshakeMs || 0) + '; rid=' + r.trace + '; id=' + r.id + '; kind=' + r.track);
             } else if (m.type === 'headers') {
                 var h = headers(m.headers), redirect = h.location && [301, 302, 303, 307, 308].indexOf(m.status) >= 0;
+                r.status = m.status;
+                if (r.group === 'video' && /^audio\//i.test(h['content-type'] || '')) r.track = 'audio';
+                else if (r.group === 'video' && /^video\//i.test(h['content-type'] || '')) r.track = 'video';
+                trace(r, 'net.headers', 'status=' + m.status + '; phase=' + (m.diagnostic ? m.diagnostic.phase : 'unknown'));
                 if (redirect) {
                     var next;
                     try { next = resolve(root, h.location, r.url); } catch (_) {}
                     if (!next || next.protocol !== 'https:' || ++r.redirects > 10) {
-                        var cb = r.callback; abort(r); cb({ type: 'error', error: 'Unsafe or excessive redirect' }); return;
+                        var cb = r.callback; abort(r, 'redirect-rejected'); cb({ type: 'error', error: 'Unsafe or excessive redirect' }); return;
                     }
                     module.postMessage({ type: 'abort', id: r.id });
+                    trace(r, 'net.end', 'reason=redirect; status=' + m.status);
                     if (next.host !== r.parsed.host) { delete r.headers.authorization; delete r.headers.cookie; }
                     if ((m.status === 303 && r.method !== 'HEAD') || ((m.status === 301 || m.status === 302) && r.method === 'POST')) {
                         r.method = 'GET'; r.body = new root.ArrayBuffer(0); delete r.headers['content-type'];
@@ -196,14 +254,20 @@
                 if (/^audio\//i.test(h['content-type'] || '')) r.mediaKind = 'audio';
             } else if (m.type === 'done' || m.type === 'error') {
                 if (m.type === 'error' && m.retryable && r.retries++ < 1) {
+                    trace(r, 'net.end', 'reason=retry; error=' + m.error); nativeTiming(m.diagnostic);
                     log.record('tls.retry', r.group + '; safe fresh connection retry; mode=' + r.mode);
                     requeue(r); return;
                 }
-                remove(r);
+                trace(r, 'net.end', 'reason=' + (m.error || 'done') + '; bytes=' + (r.received || 0) + '; status=' + (r.status || 0) + '; phase=' + (m.diagnostic ? m.diagnostic.phase : 'unknown'));
+                nativeTiming(m.diagnostic); remove(r);
                 if (m.type === 'done') stats.completed++;
                 else { stats.errors++; log.record('tls.request-error', r.group + '; ' + m.error); }
                 notify();
             } else if (m.type === 'data') {
+                var first = !r.received; r.received = (r.received || 0) + m.body.byteLength;
+                if (extendedDiagnostics && (first || Date.now() - r.lastProgress >= 1000)) {
+                    trace(r, first ? 'net.first-data' : 'net.progress', 'bytes=' + r.received); r.lastProgress = Date.now();
+                }
                 stats.bytes += m.body.byteLength;
                 if (r.mediaKind && r.mediaSuccess && r.mediaKey === mediaKey && r.transport) {
                     media[r.mediaKind] = r.transport;
@@ -221,13 +285,23 @@
         var startTimer = setTimeout(function () { if (!ready) moduleFailure(); }, 30000);
         container.addEventListener('load', function () { if (ready) clearTimeout(startTimer); }, true);
         var api = { request: request, abort: abort, summary: summary,
+            diagnosticsEnabled: function () { return extendedDiagnostics; },
+            recordWork: function (rid, id, event, detail) {
+                if (extendedDiagnostics) log.record(event, 'rid=' + rid + '; id=' + id + '; ' + detail);
+            },
+            setDiagnostics: function (value) {
+                extendedDiagnostics = value !== false;
+                logDiagnosticReply = false; diagnostics = [];
+                module.postMessage({ type: 'diagnostic-setting', enabled: extendedDiagnostics });
+                log.record('diagnostics.mode', extendedDiagnostics ? 'extended' : 'basic');
+            },
             setMode: function (value) {
                 mode = validMode(value);
                 // Already-open connections retain their negotiated version until playback/reload creates new ones.
                 notify(); log.record('tls.mode', mode);
             },
             system: function (group) { if (group === 'video' && last.video !== 'unknown') { last.video = 'unknown'; media = { video: 'unknown', audio: 'unknown' }; ciphers.video = ciphers.audio = 'unknown'; notify(); } },
-            inspect: function () { module.postMessage({ type: 'inspect' }); return diagnostics; },
+            inspect: function (recordReply) { if (!extendedDiagnostics) return []; if (recordReply) logDiagnosticReply = true; module.postMessage({ type: 'inspect' }); return diagnostics; },
             install: function (win) { install(win, api); }
         };
         return api;
@@ -241,7 +315,11 @@
             object._event = function (type, loaded, total) {
                 var event = { type: type, target: object, currentTarget: object, loaded: loaded || 0, total: total || 0, lengthComputable: total > 0 };
                 var callbacks = (listeners[type] || []).slice(); if (typeof object['on' + type] === 'function') callbacks.unshift(object['on' + type]);
+                var measured = transport.diagnosticsEnabled() && object._nativeId, started = measured ? Date.now() : 0;
+                var rid = object._traceId, id = object._nativeId, ready = object._state;
                 callbacks.forEach(function (cb) { try { if (typeof cb === 'function') cb.call(object, event); else if (cb && cb.handleEvent) cb.handleEvent(event); } catch (e) { setTimeout(function () { throw e; }, 0); } });
+                if (measured && Date.now() - started >= 100) transport.recordWork(rid, id, 'net.xhr-event',
+                    'event=' + type + '; state=' + ready + '; callbacks=' + callbacks.length + '; elapsedMs=' + (Date.now() - started));
             };
         }
         function XHR() {
@@ -260,7 +338,7 @@
         function untrack(xhr) { clearTimeout(xhr._timer); live = live.filter(function (item) { return item !== xhr; }); xhr._request = null; xhr._sent = false; }
         function fail(xhr, type) {
             var generation = xhr._generation;
-            transport.abort(xhr._request); untrack(xhr); xhr._chunks = []; xhr._body = null; xhr._length = 0;
+            transport.abort(xhr._request, type); untrack(xhr); xhr._chunks = []; xhr._body = null; xhr._length = 0;
             xhr._status = 0; xhr._statusText = ''; xhr._responseHeaders = {}; xhr._url = '';
             resetText(xhr);
             state(xhr, 4);
@@ -271,6 +349,7 @@
         XHR.prototype.open = function (method, url, async, user, password) {
             this.abort(); this._method = String(method).toUpperCase(); this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._length = 0; this._body = null;
             this._generation++;
+            this._traceId = this._nativeId = 0;
             resetText(this);
             this._status = 0; this._statusText = ''; this._url = ''; this._native = null;
             var u = resolve(win, url);
@@ -323,6 +402,7 @@
                 if (!body) { fail(self, 'error'); return; }
                 self._request = transport.request(self._method, self._target, self._headers, body, function (m) {
                     if (!self._sent || self._generation !== generation) return;
+                    self._traceId = self._request.trace; self._nativeId = m.id;
                     if (m.type === 'headers') {
                         self._status = m.status; self._statusText = m.statusText; self._responseHeaders = m.headers; self._url = m.url; state(self, 2);
                     } else if (m.type === 'data') {
@@ -333,16 +413,25 @@
                         state(self, 3);
                         if (self._sent && self._generation === generation) self._event('progress', self._length, +self._responseHeaders['content-length'] || 0);
                     } else if (m.type === 'done') {
-                        var total = +self._responseHeaders['content-length'] || 0;
-                        self._event('progress', self._length, total);
-                        if (!self._sent || self._generation !== generation) return;
-                        if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length);
-                        else decoded(self, true);
-                        self._chunks = []; untrack(self);
-                        state(self, 4);
-                        if (self._generation !== generation || self._state !== 4) return;
-                        self._event('load', self._length, total);
-                        if (self._generation === generation && self._state === 4) self._event('loadend', self._length, total);
+                        var measured = transport.diagnosticsEnabled(), started = measured ? Date.now() : 0;
+                        var rid = self._traceId, id = self._nativeId, length = self._length, chunks = self._chunks.length, assembleMs = 0;
+                        try {
+                            var total = +self._responseHeaders['content-length'] || 0;
+                            self._event('progress', self._length, total);
+                            if (!self._sent || self._generation !== generation) return;
+                            var assembleStart = measured ? Date.now() : 0;
+                            if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length);
+                            else decoded(self, true);
+                            if (measured) assembleMs = Date.now() - assembleStart;
+                            self._chunks = []; untrack(self);
+                            state(self, 4);
+                            if (self._generation !== generation || self._state !== 4) return;
+                            self._event('load', self._length, total);
+                            if (self._generation === generation && self._state === 4) self._event('loadend', self._length, total);
+                        } finally {
+                            if (measured) transport.recordWork(rid, id, 'net.xhr-done', 'bytes=' + length + '; chunks=' + chunks +
+                                '; assembleMs=' + assembleMs + '; elapsedMs=' + (Date.now() - started));
+                        }
                     } else if (m.type === 'error') fail(self, m.error === 'timeout' ? 'timeout' : 'error');
                 });
                 self.upload._event('loadstart'); self.upload._event('progress', body.byteLength, body.byteLength);
