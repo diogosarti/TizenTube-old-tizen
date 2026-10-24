@@ -1,4 +1,25 @@
 {
+  "cdnJournal": {
+    "title": "Проблемные CDN",
+    "counter": "Проблемные GGC: {{count}}",
+    "added": "Добавлен проблемный GGC · Всего: {{count}}",
+    "header": "Сохранено: {{count}} / 50 · Повторные сбои, не подтверждённые блокировки",
+    "collect": "Собирать проблемные домены GGC",
+    "showCount": "Показывать счётчик проблемных GGC, если не ноль",
+    "enabled": "Сбор включён",
+    "disabled": "Сбор выключен",
+    "close": "Закрыть",
+    "row": "Сбоев: {{count}} · Последний: {{date}}",
+    "details": "Сбоев: {{count}} · Режим: {{mode}} · {{reason}} · Первый: {{first}} · Последний: {{last}}",
+    "empty": "Записей нет",
+    "remove": "Удалить запись",
+    "clear": "Очистить все записи",
+    "clearQuestion": "Очистить журнал CDN?",
+    "cancel": "Отмена",
+    "back": "Назад к списку",
+    "storageError": "Не удалось сохранить журнал в память ТВ",
+    "reasons": { "dns": "Ошибка DNS", "tcp": "Ошибка TCP", "tls": "Ошибка TLS", "timeout": "Таймаут запроса", "truncated": "Неполный ответ", "tls-wait": "Долгое ожидание завершения TLS", "response-wait": "Долгое ожидание заголовков ответа" }
+  },
   "legacyNetwork": {
     "extendedDiagnostics": "Расширенная диагностика",
     "title": "Соединение TLS",
@@ -299,6 +320,7 @@
         "miniPlayer": "Мини-плеер",
         "pictureInPicture": "Картинка в картинке",
         "previous": "Предыдущее",
+        "start": "В начало видео",
         "next": "Следующее",
         "withTizenTube": "с TizenTube",
         "share": {

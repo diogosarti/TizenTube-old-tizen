@@ -2,31 +2,61 @@
 
 import { extractAssignedFunctions } from "../utils/ASTParser.js";
 import { configRead } from "../config.js";
-import { ButtonRenderer } from "./ytUI.js";
+import { ButtonRenderer, showToast } from "./ytUI.js";
 import { t } from 'i18next';
+
+function alignStartButton(controls) {
+    const buttons = Array.from(controls.querySelectorAll('yt-button-container'));
+    const start = buttons.find(button => button.getAttribute('aria-label') === t('player.start'));
+    const previous = buttons.find(button => button.getAttribute('aria-label') === t('player.previous'));
+    function renderer(button) {
+        while (button && button.tagName !== 'YTLR-BUTTON-RENDERER') button = button.parentNode;
+        return button;
+    }
+    const item = renderer(start), anchor = renderer(previous);
+    if (!item || !anchor) return;
+    const box = item.getBoundingClientRect(), target = anchor.getBoundingClientRect();
+    if (!box.width || !target.width) return;
+    // Keep native focus/navigation and icon sizing, moving only this button's visual position.
+    item.__ttStartX = Math.round((item.__ttStartX || 0) + target.left - box.width - target.width / 4 - box.left);
+    item.__ttStartY = Math.round((item.__ttStartY || 0) + target.top + (target.height - box.height) / 2 - box.top);
+    item.style.position = 'relative';
+    item.style.left = item.__ttStartX + 'px';
+    item.style.top = item.__ttStartY + 'px';
+}
 
 // Show request results alongside the player's controls without extra network checks.
 if (window.__legacyDirect && parent.__legacyTLS) {
+    let lastCDNNotice = 0;
     setInterval(() => {
+        const state = parent.__legacyTLS.summary();
+        if (state.cdnAddedAt > lastCDNNotice) {
+            lastCDNNotice = state.cdnAddedAt;
+            if (state.cdnCollecting && Date.now() - state.cdnAddedAt < 8000 && document.querySelector('video')) {
+                showToast(t('cdnJournal.title'), t('cdnJournal.added', { count: state.cdnProblems }));
+            }
+        }
         const controls = document.querySelector('ytlr-player-actions-container');
         let badge = document.querySelector('.tt-media-transport');
         if (!controls) {
             if (badge) badge.style.display = 'none';
             return;
         }
+        alignStartButton(controls);
         if (!badge) {
             badge = document.createElement('span');
             badge.className = 'tt-media-transport';
             badge.style.cssText = 'position:fixed;right:36px;top:36px;z-index:10000;padding:8px 14px;background:rgba(0,0,0,.75);color:white;font-size:26px;border-radius:6px;pointer-events:none;white-space:pre;';
             document.body.appendChild(badge);
         }
-        const state = parent.__legacyTLS.summary();
         const label = value => value === 'unknown' ? t('legacyNetwork.unknown') : value;
         const lines = [];
+        if (configRead('showCDNCount') && state.cdnProblems > 0) lines.push(t('cdnJournal.counter', { count: state.cdnProblems }));
+        if (state.cdnPersistent === false) lines.push(t('cdnJournal.storageError'));
         if (configRead('showPlayerProtocol')) {
             lines.push(t('legacyNetwork.playerVideo', { transport: label(state.video) }));
             if (state.audio && state.audio !== 'unknown' && state.audio !== state.video) {
-                lines[0] += ' · ' + t('legacyNetwork.playerAudio', { transport: label(state.audio) });
+                lines[lines.length - 1] += ' · ' + t('legacyNetwork.playerAudio', { transport: label(state.audio) });
             }
         }
         const display = configRead('sponsorBlockStatusDisplay');
@@ -78,6 +108,8 @@ function applyPatches() {
     const previousButtonName = member(func => func.rhs.includes('skipNextButton') && func.rhs.indexOf('skipPreviousButton') > func.rhs.indexOf('skipNextButton'));
     const nextButtonName = member(func => func.rhs.includes('skipPreviousButton') && func.rhs.indexOf('skipNextButton') > func.rhs.indexOf('skipPreviousButton'));
     const engagementActionButton = member(func => func.rhs.includes('props.data.engagementActions'));
+    const promotedActions = member(func => func.rhs.includes('props.data.promotedActions') &&
+        func.rhs.includes('TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION'));
     const mountMethod = Object.getOwnPropertyNames(origMethod.prototype).find(name => {
         const method = Object.getOwnPropertyDescriptor(origMethod.prototype, name).value;
         return typeof method === 'function' && /this\.on\(["']keydown["']/.test(method.toString());
@@ -87,6 +119,16 @@ function applyPatches() {
     function patchPlayerActions(inst) {
         if (inst.__ttPlayerActionsPatched) return inst;
         inst.__ttPlayerActionsPatched = true;
+        if (promotedActions && window.__legacyDirect && parent.__legacyTLS) {
+            const original = inst[promotedActions];
+            inst[promotedActions] = function () {
+                return (original.apply(this, arguments) || []).concat([{
+                    type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_SEEK_START',
+                    button: { buttonRenderer: ButtonRenderer(false, t('player.start'), 'REPLAY',
+                        { customAction: { action: 'SKIP', parameters: { time: 0 } } }) }
+                }]);
+            };
+        }
         const pipCommand = {
             "type": "TRANSPORT_CONTROLS_BUTTON_TYPE_PIP",
             "button": {

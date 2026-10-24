@@ -1,4 +1,12 @@
-﻿# Changelog
+# Changelog
+
+## v2.3.26
+
+- Added a Go to beginning button beside Previous video, seeking the current video to 0:00.
+- Aligned binary XHR response buffers with the requesting frame for compatibility with legacy WebKit.
+- Added an optional persistent journal of up to 50 problematic Googlevideo domains. Collection is disabled by default and works without a PC or Web Inspector.
+- Added a full-screen CDN list with wrapped hostnames, failure details, individual deletion and confirmed clearing.
+- Added an optional player counter shown only when the problematic-domain count is greater than zero, plus notifications for newly listed domains.
 
 ## v2.3.21
 

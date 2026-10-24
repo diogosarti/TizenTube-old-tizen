@@ -1,4 +1,5 @@
 import { configWrite, configRead } from './config.js';
+import { cdnAction } from './ui/cdnUI.js';
 import { enablePip } from './features/pictureInPicture.js';
 import modernUI, { optionShow } from './ui/settings.js';
 import { speedSettings } from './ui/speedUI.js';
@@ -196,6 +197,7 @@ export function patchResolveCommand() {
 }
 
 function customAction(action, parameters) {
+    if (/^CDN_(SHOW|ENTRY|DELETE|CLEAR|CLEAR_CONFIRM)$/.test(action)) return cdnAction(action, parameters);
     switch (action) {
         case 'SETTINGS_UPDATE':
             modernUI(true, parameters);

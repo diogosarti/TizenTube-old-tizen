@@ -31,7 +31,7 @@ async function build() {
     if (result.status !== 0) throw new Error('Legacy bundle build failed');
     const files = {
         'config.xml': 'widget/config.xml', 'index.html': 'widget/index.html', 'widget.js': 'widget/widget.js', 'player.html': 'widget/player.html',
-        'logger.js': 'web/logger.js', 'frame.js': 'web/frame.js', 'player.css': 'widget/player.css',
+        'logger.js': 'web/logger.js', 'cdn-journal.js': 'web/cdn-journal.js', 'frame.js': 'web/frame.js', 'player.css': 'widget/player.css',
         'tls-transport.js': 'web/tls-transport.js', 'tls-client.nmf': 'native/assets/tls-client.nmf', 'tls-client.nexe': 'native/assets/tls-client.nexe',
         'LICENSE-MbedTLS.txt': 'native/assets/LICENSE-MbedTLS.txt', 'NOTICE-NaCl.txt': 'native/assets/NOTICE-NaCl.txt',
         'LICENSE-CA.txt': 'native/assets/LICENSE-CA.txt',

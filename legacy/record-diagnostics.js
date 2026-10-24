@@ -6,11 +6,13 @@ const path = require('node:path');
 const http = require('node:http');
 const WebSocket = require('ws');
 const { clean } = require('./web/logger');
+const { validHost } = require('./web/cdn-journal');
 
 function snapshot() {
     if (!window.__legacyLog || !window.__legacyTLS) return { app: false };
     var out = { app: true, epoch: performance.timing.navigationStart, logs: window.__legacyLog.read(), tls: window.__legacyTLS.summary() };
     out.native = window.__legacyTLS.inspect(); // Previous asynchronous reply; refreshed on the next poll.
+    if (window.__legacyTLS.problemCDNs) out.cdns = window.__legacyTLS.problemCDNs.read();
     try {
         var frame = document.querySelector('iframe'), w = frame && frame.contentWindow;
         var d = w && w.document, v = d && d.querySelector('video'), p = d && d.querySelector('.html5-video-player');
@@ -36,6 +38,12 @@ function snapshot() {
 // A second allowlist on the PC prevents unexpected page data reaching disk.
 function sanitize(s) {
     const out = { app: s.app === true, epoch: Number(s.epoch) || 0, frame: Number(s.frame) || 0 };
+    if (Array.isArray(s.cdns)) out.cdns = s.cdns.slice(0, 50).filter(r => r && validHost(r.host) &&
+        /^(dns|tcp|tls|timeout|truncated|tls-wait|response-wait)$/.test(r.reason) && /^(auto|1\.[23])$/.test(r.mode)).map(r => {
+        const row = { host: r.host, reason: r.reason, mode: r.mode };
+        for (const k of ['firstAt', 'lastAt', 'count', 'handledAt']) if (Number.isFinite(r[k]) && r[k] >= 0) row[k] = r[k];
+        return row;
+    });
     out.logs = (Array.isArray(s.logs) ? s.logs : []).map(e => ({
         n: Number(e.n) || 0, ms: Number(e.ms) || 0, code: clean(e.code),
         detail: /^(page\.error|promise\.)/.test(e.code) ? '[message omitted]' : clean(e.detail)
@@ -72,7 +80,7 @@ function sanitize(s) {
         if (typeof request.host === 'string' && /^(?:[a-zA-Z0-9-]+\.)*(?:youtube\.com|googlevideo\.com|googleapis\.com|google\.com|gstatic\.com|ajay\.app)$|^(?:api|localhost)$/.test(request.host)) result.host = request.host;
         return result;
     });
-    for (const k of ['active', 'queued', 'completed', 'bytes', 'errors']) {
+    for (const k of ['active', 'queued', 'completed', 'bytes', 'errors', 'cdnProblems']) {
         if (s.tls && Number.isFinite(s.tls[k])) out.tls[k] = s.tls[k];
     }
     for (const k of ['mode', 'api', 'video', 'audio', 'system', 'apiCipher', 'videoCipher', 'audioCipher']) {
@@ -117,7 +125,7 @@ function pages(host, port) {
 
 async function record(host, dir) {
     const writer = new Writer(dir);
-    let stopped = false, socket, epoch = 0, cursor = 0, previous, lastNotice = '';
+    let stopped = false, socket, epoch = 0, cursor = 0, previous, lastNotice = '', lastJournal;
     const notice = state => {
         if (state !== lastNotice) { writer.write({ type: 'recorder', state }); console.log(new Date().toLocaleTimeString(), state); lastNotice = state; }
     };
@@ -158,7 +166,11 @@ async function record(host, dir) {
                 if (!s.app) throw new Error('different-app');
                 notice('recording');
                 const last = s.logs.length ? s.logs[s.logs.length - 1].n : 0;
-                if (epoch !== s.epoch || last < cursor) { epoch = s.epoch; cursor = 0; writer.write({ type: 'app-session' }); previous = undefined; }
+                if (epoch !== s.epoch || last < cursor) { epoch = s.epoch; cursor = 0; writer.write({ type: 'app-session' }); previous = undefined; lastJournal = undefined; }
+                if (s.cdns) {
+                    const journal = JSON.stringify(s.cdns);
+                    if (journal !== lastJournal) { writer.write({ type: 'cdn-journal', entries: s.cdns }); lastJournal = journal; }
+                }
                 const fresh = s.logs.filter(e => e.n > cursor);
                 if (fresh.length && cursor && fresh[0].n > cursor + 1) writer.write({ type: 'log-gap', lost: fresh[0].n - cursor - 1 });
                 for (const entry of fresh) writer.write({ type: 'app', ...entry });

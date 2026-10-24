@@ -17,6 +17,8 @@ const defaultConfig = {
   preferredVideoQuality: 'auto',
   tlsMode: '1.2',
   extendedDiagnostics: false,
+  collectProblemCDNs: false,
+  showCDNCount: true,
   showPlayerProtocol: true,
   sponsorBlockStatusDisplay: 'unavailable',
   enableDeArrow: true,
@@ -102,6 +104,7 @@ export function configWrite(key, value) {
   window.localStorage[CONFIG_KEY] = JSON.stringify(localConfig);
   if (key === 'tlsMode' && window.__legacyDirect && parent.__legacyTLS) parent.__legacyTLS.setMode(value);
   if (key === 'extendedDiagnostics' && window.__legacyDirect && parent.__legacyTLS) parent.__legacyTLS.setDiagnostics(value);
+  if (key === 'collectProblemCDNs' && window.__legacyDirect && parent.__legacyTLS) parent.__legacyTLS.setCDNCollection(value);
   configChangeEmitter.dispatchEvent(new CustomEvent('configChange', { detail: { key, value } }));
 }
 

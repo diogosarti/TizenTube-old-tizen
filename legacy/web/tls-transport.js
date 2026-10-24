@@ -27,9 +27,9 @@
         for (var i = 0; i < text.length; i++) array[i] = text.charCodeAt(i);
         callback(array.buffer);
     }
-    function combine(chunks, length) {
-        if (chunks.length === 1) return chunks[0];
-        var all = new root.Uint8Array(length), at = 0;
+    function combine(chunks, length, Buffer, ByteArray) {
+        if (chunks.length === 1 && chunks[0] instanceof Buffer) return chunks[0];
+        var all = new ByteArray(length), at = 0;
         for (var i = 0; i < chunks.length; i++) { all.set(new root.Uint8Array(chunks[i]), at); at += chunks[i].byteLength; }
         return all.buffer;
     }
@@ -78,20 +78,26 @@
     }
     function create(container, log, changed) {
         var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = '1.2';
-        var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 }, extendedDiagnostics = false;
+        var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 }, extendedDiagnostics = false, collectProblemCDNs = false;
         var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], logDiagnosticReply = false, mediaKey = '', media = { video: 'unknown', audio: 'unknown' }, ciphers = { api: 'unknown', video: 'unknown', audio: 'unknown' }, lastNotice = '';
         try {
             var saved = JSON.parse(root.localStorage.getItem(CONFIG_KEY) || '{}');
             mode = validMode(saved.tlsMode);
             extendedDiagnostics = saved.extendedDiagnostics === true;
+            collectProblemCDNs = saved.collectProblemCDNs === true;
             if (saved.tlsMode !== mode) { saved.tlsMode = mode; root.localStorage.setItem(CONFIG_KEY, JSON.stringify(saved)); }
         } catch (_) {}
+        var journalStorage;
+        try { journalStorage = root.localStorage; } catch (_) { /* Playback remains available without persistent storage. */ }
+        var journal = root.LegacyCDNJournal.create(journalStorage, function () { notify(); }, function () { return Date.now(); });
         function notify() {
-            var key = [mode, last.api, last.video, media.audio, ciphers.api, ciphers.video, ciphers.audio, ready, failed].join('|');
+            var key = [mode, last.api, last.video, media.audio, ciphers.api, ciphers.video, ciphers.audio, ready, failed, collectProblemCDNs, journal.summary().revision].join('|');
             if (changed && key !== lastNotice) { lastNotice = key; changed(summary()); }
         }
         function summary() {
+            var cdn = journal.summary();
             return { mode: mode, api: last.api, video: last.video, system: 'unknown', active: active, queued: queue.length,
+                cdnProblems: cdn.count, cdnAddedAt: cdn.addedAt, cdnPersistent: cdn.persistent, cdnCollecting: collectProblemCDNs,
                 audio: media.audio, apiCipher: ciphers.api, videoCipher: ciphers.video, audioCipher: ciphers.audio,
                 completed: stats.completed, bytes: stats.bytes, errors: stats.errors, ready: ready, failed: failed };
         }
@@ -136,7 +142,7 @@
                 if (index < 0 && other < 4 && background < 1) for (i = 0; i < queue.length; i++) if (queue[i].group !== 'video' && queue[i].background) { index = i; break; }
                 if (index < 0) break;
                 var r = queue.splice(index, 1)[0]; if (!requests[r.id]) continue;
-                active++; r.active = true;
+                active++; r.active = true; r.startedAt = Date.now(); r.tlsReady = false;
                 var u = r.parsed, lines = '', h = r.headers;
                 log.record('tls.queue', r.group + '; waitMs=' + (Date.now() - r.queuedAt));
                 r.received = 0; r.status = 0; r.lastProgress = Date.now();
@@ -155,8 +161,19 @@
             queue = queue.filter(function (item) { return item !== r; });
             setTimeout(pump, 0);
         }
+        function cdnFailure(r, reason) {
+            if (!collectProblemCDNs || r.group !== 'video' || r.parsed.pathname !== '/videoplayback' || !r.active || !r.startedAt ||
+                (r.status && !r.mediaSuccess)) return;
+            try { if (r.guard && !r.guard()) return; } catch (_) { return; }
+            journal.failure(r.parsed.hostname, r.mode, reason, r.trace, r.startedAt);
+        }
         function abort(r, reason) {
             if (!r || !requests[r.id]) return;
+            if (reason === 'timeout') cdnFailure(r, 'timeout');
+            else if ((!reason || reason === 'abort') && r.guard && !r.status && !r.received &&
+                Date.now() - r.startedAt >= (r.tlsReady ? 15000 : 10000)) {
+                cdnFailure(r, r.tlsReady ? 'response-wait' : 'tls-wait');
+            }
             trace(r, 'net.end', 'reason=' + (reason || 'abort') + '; bytes=' + (r.received || 0) + '; status=' + (r.status || 0));
             if (r.active) module.postMessage({ type: 'abort', id: r.id });
             remove(r); r.callback = null;
@@ -166,14 +183,14 @@
             r.id = ++sequence; r.queuedAt = Date.now(); r.mediaRecorded = false; requests[r.id] = r; queue.push(r); setTimeout(pump, 0);
             trace(r, 'net.queued', 'attempt=requeued');
         }
-        function request(method, url, h, body, callback) {
+        function request(method, url, h, body, callback, guard) {
             var u = resolve(root, url);
             var r = { id: ++sequence, method: method, url: url, parsed: u, headers: h, body: body, callback: callback, mode: mode, redirects: 0, retries: 0, group: category(u), queuedAt: Date.now(),
                 background: (/^sponsor\.ajay\.app$/i.test(u.hostname) && u.pathname === '/api/branding') ||
                     (/(^|\.)youtube\.com$/i.test(u.hostname) && /^\/(api\/stats\/|ptracking(?:\?|$)|generate_204|youtubei\/v1\/log_event)/.test(u.pathname) &&
                     !/^\/api\/stats\/(playback|watchtime)$/.test(u.pathname)) };
             var key = /(?:[?&])id=([^&]+)/.exec(u.search), mime = /(?:[?&])mime=([^&]+)/.exec(u.search), itag = /(?:[?&])itag=(\d{1,5})(?:&|$)/.exec(u.search);
-            r.trace = r.id; r.createdAt = r.queuedAt; r.itag = itag ? +itag[1] : 0;
+            r.trace = r.id; r.createdAt = r.queuedAt; r.itag = itag ? +itag[1] : 0; r.guard = guard;
             r.track = r.group === 'api' ? 'api' : mime && /^audio(?:%2f|\/)/i.test(mime[1]) ? 'audio' : mime && /^video(?:%2f|\/)/i.test(mime[1]) ? 'video' : 'unknown';
             if (r.group === 'video' && u.pathname === '/videoplayback') {
                 r.mediaKey = key ? key[1] : mediaKey;
@@ -223,6 +240,7 @@
                 return;
             }
             if (m.type === 'tls') {
+                r.tlsReady = true;
                 if (!m.verified) { var rejected = r.callback; abort(r, 'certificate-rejected'); rejected({ type: 'error', error: 'Certificate verification failed' }); return; }
                 r.transport = m.tls.replace('TLSv', 'TLS ');
                 r.cipher = m.cipher || 'unknown';
@@ -259,6 +277,11 @@
                     requeue(r); return;
                 }
                 trace(r, 'net.end', 'reason=' + (m.error || 'done') + '; bytes=' + (r.received || 0) + '; status=' + (r.status || 0) + '; phase=' + (m.diagnostic ? m.diagnostic.phase : 'unknown'));
+                if (m.type === 'error') {
+                    var errorReason = /^DNS:/.test(m.error) ? 'dns' : /^TCP(?: read| write)?:/.test(m.error) ? 'tcp' :
+                        /^(TLS|SSL|X509)/.test(m.error) ? 'tls' : m.error === 'Truncated HTTP response' ? 'truncated' : m.error === 'timeout' ? 'timeout' : '';
+                    if (errorReason) cdnFailure(r, errorReason);
+                } else if (collectProblemCDNs && r.group === 'video' && r.mediaSuccess && r.received > 0) journal.success(r.parsed.hostname);
                 nativeTiming(m.diagnostic); remove(r);
                 if (m.type === 'done') stats.completed++;
                 else { stats.errors++; log.record('tls.request-error', r.group + '; ' + m.error); }
@@ -284,7 +307,11 @@
         module.width = 1; module.height = 1; container.appendChild(module);
         var startTimer = setTimeout(function () { if (!ready) moduleFailure(); }, 30000);
         container.addEventListener('load', function () { if (ready) clearTimeout(startTimer); }, true);
-        var api = { request: request, abort: abort, summary: summary,
+        var api = { request: request, abort: abort, summary: summary, problemCDNs: journal,
+            setCDNCollection: function (value) {
+                collectProblemCDNs = value === true;
+                journal.resetCandidates(); notify();
+            },
             diagnosticsEnabled: function () { return extendedDiagnostics; },
             recordWork: function (rid, id, event, detail) {
                 if (extendedDiagnostics) log.record(event, 'rid=' + rid + '; id=' + id + '; ' + detail);
@@ -307,7 +334,23 @@
         return api;
     }
     function install(win, transport) {
-        var NativeXHR = win.XMLHttpRequest, live = [];
+        var NativeXHR = win.XMLHttpRequest, NativeBuffer = win.ArrayBuffer, NativeBytes = win.Uint8Array, live = [];
+        var interactionAt = -Infinity, leaving = false;
+        function interacted() { interactionAt = Date.now(); }
+        function unloading() { leaving = true; }
+        win.addEventListener('keydown', interacted, true);
+        win.addEventListener('pointerdown', interacted, true);
+        win.addEventListener('seeking', interacted, true);
+        win.addEventListener('hashchange', interacted, true);
+        win.addEventListener('beforeunload', unloading);
+        function playbackGuard() {
+            var hash = win.location && win.location.hash;
+            var video = win.document.querySelector && win.document.querySelector('video');
+            return function () {
+                return !leaving && win.navigator.onLine !== false && video && win.document.querySelector('video') === video &&
+                    (!win.location || win.location.hash === hash) && Date.now() - interactionAt > 3000 && !video.paused && !video.seeking;
+            };
+        }
         function events(object) {
             var listeners = {};
             object.addEventListener = function (type, cb) { (listeners[type] || (listeners[type] = [])).push(cb); };
@@ -317,7 +360,13 @@
                 var callbacks = (listeners[type] || []).slice(); if (typeof object['on' + type] === 'function') callbacks.unshift(object['on' + type]);
                 var measured = transport.diagnosticsEnabled() && object._nativeId, started = measured ? Date.now() : 0;
                 var rid = object._traceId, id = object._nativeId, ready = object._state;
-                callbacks.forEach(function (cb) { try { if (typeof cb === 'function') cb.call(object, event); else if (cb && cb.handleEvent) cb.handleEvent(event); } catch (e) { setTimeout(function () { throw e; }, 0); } });
+                callbacks.forEach(function (cb, index) {
+                    var callbackStart = measured ? Date.now() : 0;
+                    try { if (typeof cb === 'function') cb.call(object, event); else if (cb && cb.handleEvent) cb.handleEvent(event); }
+                    catch (e) { setTimeout(function () { throw e; }, 0); }
+                    if (measured && Date.now() - callbackStart >= 100) transport.recordWork(rid, id, 'net.xhr-callback',
+                        'event=' + type + '; index=' + index + '; elapsedMs=' + (Date.now() - callbackStart));
+                });
                 if (measured && Date.now() - started >= 100) transport.recordWork(rid, id, 'net.xhr-event',
                     'event=' + type + '; state=' + ready + '; callbacks=' + callbacks.length + '; elapsedMs=' + (Date.now() - started));
             };
@@ -420,7 +469,8 @@
                             self._event('progress', self._length, total);
                             if (!self._sent || self._generation !== generation) return;
                             var assembleStart = measured ? Date.now() : 0;
-                            if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length);
+                            // Match native XHR: the response belongs to the requesting window.
+                            if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length, NativeBuffer, NativeBytes);
                             else decoded(self, true);
                             if (measured) assembleMs = Date.now() - assembleStart;
                             self._chunks = []; untrack(self);
@@ -433,7 +483,7 @@
                                 '; assembleMs=' + assembleMs + '; elapsedMs=' + (Date.now() - started));
                         }
                     } else if (m.type === 'error') fail(self, m.error === 'timeout' ? 'timeout' : 'error');
-                });
+                }, playbackGuard());
                 self.upload._event('loadstart'); self.upload._event('progress', body.byteLength, body.byteLength);
                 self.upload._event('load'); self.upload._event('loadend');
             });

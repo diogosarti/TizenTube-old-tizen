@@ -11,6 +11,14 @@ export default function modernUI(update, parameters) {
     const tlsStatus = tls ? t('legacyNetwork.status', { api: tls.api, video: tls.video }) : '';
     const settings = [
         tls ? {
+            name: t('cdnJournal.collect'), icon: 'SETTINGS', value: 'collectProblemCDNs'
+        } : null,
+        tls ? {
+            name: t('cdnJournal.title'), icon: 'SETTINGS', value: null,
+            subtitle: t('cdnJournal.counter', { count: tls.cdnProblems }),
+            action: { customAction: { action: 'CDN_SHOW', parameters: {} } }
+        } : null,
+        tls ? {
             name: t('legacyNetwork.extendedDiagnostics'),
             icon: 'SETTINGS',
             value: 'extendedDiagnostics'
@@ -33,6 +41,7 @@ export default function modernUI(update, parameters) {
             value: null,
             menuId: 'tt-player-indicators',
             options: [
+                { name: t('cdnJournal.showCount'), value: 'showCDNCount' },
                 { name: t('legacyNetwork.showProtocol'), value: 'showPlayerProtocol' },
                 {
                     name: t('legacyNetwork.showSponsorStatus'), value: null,

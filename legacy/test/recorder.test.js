@@ -9,6 +9,16 @@ const { spawn } = require('node:child_process');
 const { WebSocketServer } = require('ws');
 const { sanitize, Writer } = require('../record-diagnostics');
 
+test('recorder exports only bounded public CDN journal metadata', () => {
+    const cdns=Array.from({length:60},(_,i)=>({host:'rr'+i+'---sn-example.googlevideo.com',mode:'1.3',reason:'tls',count:2,firstAt:100,lastAt:200,handledAt:0,
+        token:'private-synthetic',url:'https://example.test/private-synthetic'}));
+    const result=sanitize({logs:[],cdns});
+    assert.equal(result.cdns.length,50);
+    assert.equal(result.cdns[0].host,cdns[0].host);
+    assert.equal(JSON.stringify(result).includes('private-synthetic'),false);
+    assert.deepEqual(sanitize({logs:[],cdns:[{host:'evil.test',mode:'1.3',reason:'tls'}]}).cdns,[]);
+});
+
 test('recorder keeps playback diagnostics without arbitrary player or account fields', () => {
     const result = sanitize({ app: true, video: { time: 12, rate: 1, buffered: [[0, 20]], cookie: 'private' },
         logs: [{ n: 1, code: 'tls.request-error', detail: 'https://example.test/v?token=secret' },
@@ -57,7 +67,8 @@ test('recorder reconnects after a dropped inspector connection without launching
             const request = JSON.parse(data);
             assert.equal(request.method, 'Runtime.evaluate');
             evaluations++;
-            ws.send(JSON.stringify({ id: request.id, result: { result: { value: JSON.stringify({ app: true, epoch: 1, logs: [], video: { time: evaluations, rate: 1 } }) } } }));
+            ws.send(JSON.stringify({ id: request.id, result: { result: { value: JSON.stringify({ app: true, epoch: 1, logs: [], video: { time: evaluations, rate: 1 },
+                cdns: [{host:'rr1---sn-example.googlevideo.com',mode:'1.3',reason:'tls',count:evaluations<3?2:3,firstAt:100,lastAt:200,handledAt:0}] }) } } }));
             if (connections === 1) setTimeout(() => ws.terminate(), 50);
         });
     });
@@ -66,11 +77,13 @@ test('recorder reconnects after a dropped inspector connection without launching
         await new Promise((resolve, reject) => { server.once('error', reject); server.listen(7011, '127.0.0.1', resolve); });
         child = spawn(process.execPath, [path.join(__dirname, '..', 'record-diagnostics.js'), '127.0.0.1', dir], { stdio: 'ignore' });
         const deadline = Date.now() + 11000;
-        while (Date.now() < deadline && (connections < 2 || evaluations < 2)) await new Promise(r => setTimeout(r, 100));
+        while (Date.now() < deadline && (connections < 2 || evaluations < 4)) await new Promise(r => setTimeout(r, 100));
         assert.ok(connections >= 2);
         const records = fs.readdirSync(dir).flatMap(n => fs.readFileSync(path.join(dir, n), 'utf8').trim().split('\n').map(JSON.parse));
         assert.ok(records.some(r => r.type === 'sample'));
         assert.ok(records.some(r => r.state && r.state.startsWith('disconnected;')));
+        const journals=records.filter(r=>r.type==='cdn-journal');
+        assert.deepEqual(journals.map(r=>r.entries[0].count),[2,3], 'Export changes once, without repeating unchanged lists on reconnect/poll');
     } finally {
         if (child) { const ended = new Promise(r => child.once('exit', r)); child.kill(); await ended; }
         for (const client of wss.clients) client.terminate();

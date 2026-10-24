@@ -79,6 +79,17 @@ node legacy/record-diagnostics.js TV_IP OUTPUT_DIRECTORY
 
 The recorder drains the shell log (including forwarded frame events) and samples selected playback buffers, playback rate and TLS counters once per second. It writes JSON Lines files, rotates at 16 MiB and retains up to 32 recorder files in the chosen directory. That directory should be dedicated to diagnostics; retention also covers recorder files from previous runs. It never deletes unrelated files. Ctrl+C stops recording. Keep the PC and recorder running while watching. After a connection loss it waits and reconnects to an available debug session without restarting the TV app. A normal app launch requires another debug launch. Missing ring-buffer entries are reported; activity during a disconnected interval cannot be recovered after the buffer wraps or the app closes. Account data, complete URLs, headers and response bodies are not collected; arbitrary page exception messages are omitted. Clock ratios are diagnostic measurements and can also change during a seek or video transition.
 
+## Persistent CDN journal
+
+Settings > Problematic CDNs opens a full-screen list with wrapped Googlevideo hostnames and failure metadata. The player shortcut immediately before Previous video seeks to 0:00; the journal is opened from settings. Collection is disabled by default; enable Collect problematic GGC domains in settings to collect without Extended diagnostics, Web Inspector or a computer. Disabling collection retains saved entries. The journal uses persistent Web Storage with at most 50 entries. It never stores signed media URLs, headers or account data. Storage errors are shown instead of interrupting playback.
+
+An unlisted domain needs two distinct failed requests within ten minutes. A successful media response clears its unconfirmed candidate. Requests outside `/videoplayback`, HTTP error responses, short cancellations, recent user input, seeking, pauses, video replacement and navigation are excluded. Quiet cancellations before TLS completion after at least ten seconds, or before response headers after fifteen seconds, are recorded as suspected connection waits, not proof of blocking. Connectivity loss can still cause repeated failures; this is a manual investigation list, not an automatic VPN rule generator.
+
+The separate Show problematic GGC count when nonzero setting is enabled by default. With player controls visible, it shows the count beside TLS information only when greater than zero. A brief toast announces newly listed domains while collection is enabled. Delete removes one entry; clear requires confirmation. There is no processed-history list. A deleted domain requires two new qualifying failures to return. At capacity, the least recently failing entry is removed. Unconfirmed candidates are bounded in memory, are not persisted and are reset when toggling collection.
+
+With Web Inspector enabled, `window.__legacyTLS.problemCDNs.read()` returns the journal. The PC recorder exports it as a `cdn-journal` record when its content changes, even with Extended diagnostics off. Saved entries survive application restarts. Removing the application clears its local data. The journal records repeated connection failures, not confirmed network blocks.
+
+
 ## Loading feedback and networking
 
 The shell owns the dotted indicator and its clockwise keyframes. Frame media events supply loading, buffering and seeking states; visible YouTube spinners supply a generic loading state. Messages are English regardless of the YouTube interface language.

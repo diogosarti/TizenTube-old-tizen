@@ -46,7 +46,8 @@ test('Player actions preserve constructor identity and native listeners when pat
         this.on = (type, listener) => this.listeners.push(listener);
         this.listeners = [];
         this.keyHandler = function () {};
-        this.promoted = function () { return 'TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION'; };
+        this.subscription = function () { const marker='TRANSPORT_CONTROLS_BUTTON_TYPE_SUBSCRIBE'; return this.props.data.promotedActions[0].type; };
+        this.promoted = function () { const marker = 'TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION'; return this.props.data.promotedActions; };
         this.openSettings = function () { this.popup = 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS'; };
         this.settings = function () {
             const type = 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS';
@@ -55,19 +56,21 @@ test('Player actions preserve constructor identity and native listeners when pat
         this.engagement = function () { return this.props.data.engagementActions; };
     }
     NativeActions.prototype.mount = function () { this.on('keydown', this.keyHandler); };
-    const props = () => ({ data: { settingActions: [{ type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS' }], engagementActions: [] } });
+    const props = () => ({ data: { promotedActions: [{type:'native-promoted'}], settingActions: [{ type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS' }], engagementActions: [] } });
     const existing = new NativeActions(props()); existing.mount();
     const popup = existing.openSettings;
-    const window = { _yttv: { actions: NativeActions } };
+    const subscription = existing.subscription;
+    const window = { __legacyDirect: true, _yttv: { actions: NativeActions } };
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/ui/customUI.js'), 'utf8').replace(/^import[^\n]*\n/gm, '');
     vm.runInNewContext(source, {
-        window,
+        window, parent: { __legacyTLS: {} }, setInterval() {},
         document: { readyState: 'complete', querySelectorAll: () => [{ __instance: existing }] },
         configRead: key => ['enablePatchingVideoPlayer', 'enableMPButton', 'enableSpeedControlsButton', 'enableSuperThanksButton', 'enableAIAskButton'].includes(key),
-        extractAssignedFunctions, ButtonRenderer: (_toggle, _text, icon) => ({ icon }), t: key => key
+        extractAssignedFunctions, ButtonRenderer: (_toggle, _text, icon, command) => ({ icon, command }), t: key => key
     });
     assert.equal(window._yttv.actions, NativeActions, 'Patching must keep the component constructor registered by YouTube');
     assert.equal(existing.openSettings, popup, 'The settings popup action must not be mistaken for the settings button list');
+    assert.equal(existing.subscription,subscription,'Subscription lookup also reads promotedActions but must not be patched as the visible button group');
     assert.equal(existing.listeners.length, 1, 'Patching a mounted component must not mount a replacement');
     assert.equal(existing.settings().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP').length, 1);
     assert.equal(existing.settings().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP').length, 1);
@@ -77,6 +80,53 @@ test('Player actions preserve constructor identity and native listeners when pat
     assert.equal(next.settings().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP').length, 1);
     assert.equal(next.engagement().filter(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED').length, 1);
     assert.equal(next.engagement().find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED').button.buttonRenderer.icon, 'SPEEDOMETER');
+    for (const instance of [existing, next]) {
+        assert.equal(instance.promoted().length,2);
+        assert.equal(instance.promoted()[0].type,'native-promoted');
+        assert.equal(instance.promoted()[1].button.buttonRenderer.command.customAction.action,'SKIP');
+        assert.equal(instance.promoted()[1].button.buttonRenderer.command.customAction.parameters.time,0);
+        assert.equal(instance.promoted()[1].button.buttonRenderer.icon,'REPLAY');
+        assert.equal(instance.props.data.promotedActions.length,1,'The shortcut must not mutate or duplicate native actions');
+    }
+    const loading = new NativeActions({data:{settingActions:[],engagementActions:[]}});loading.mount();
+    assert.equal(loading.promoted().length,1,'A missing native action list during loading must not break the player');
+});
+
+test('Player CDN counter respects its independent setting and stays hidden at zero', () => {
+    let tick, showCount=true;
+    const state={cdnProblems:0,cdnAddedAt:0,video:'TLS 1.3'};
+    const controls={classList:{contains:()=>false},querySelectorAll:()=>[]};
+    const badge={style:{},textContent:''};
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/ui/customUI.js'),'utf8').replace(/^import[^\n]*\n/gm,'');
+    vm.runInNewContext(source,{
+        window:{__legacyDirect:true,addEventListener(){},getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'})},
+        parent:{__legacyTLS:{summary:()=>state}},setInterval:fn=>{tick=fn;},
+        document:{readyState:'loading',querySelector:selector=>selector==='ytlr-player-actions-container'?controls:selector==='.tt-media-transport'?badge:null},
+        configRead:key=>key==='showCDNCount'?showCount:key==='showPlayerProtocol'?true:key==='sponsorBlockStatusDisplay'?'never':false,
+        t:(key,args)=>key+(args&&args.count!==undefined?':'+args.count:'')
+    });
+    tick();assert.doesNotMatch(badge.textContent,/cdnJournal.counter/);
+    state.cdnProblems=1;tick();assert.match(badge.textContent,/cdnJournal.counter:1/);
+    showCount=false;tick();assert.doesNotMatch(badge.textContent,/cdnJournal.counter/);
+    assert.match(badge.textContent,/legacyNetwork.playerVideo/);
+});
+
+test('Go to beginning is aligned beside Previous without position drift', () => {
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/ui/customUI.js'),'utf8').replace(/^import[^\n]*\n/gm,'');
+    const align=vm.runInNewContext(source+'\nalignStartButton;',{
+        window:{addEventListener(){}},document:{readyState:'loading'},t:key=>key
+    });
+    const start={tagName:'YTLR-BUTTON-RENDERER',style:{},getBoundingClientRect(){return {left:613+(parseFloat(this.style.left)||0),top:817+(parseFloat(this.style.top)||0),width:72,height:72};}};
+    const previous={tagName:'YTLR-BUTTON-RENDERER',getBoundingClientRect:()=>({left:822,top:803,width:72,height:72})};
+    const controls={querySelectorAll:()=>[
+        {getAttribute:()=> 'player.start',parentNode:start},
+        {getAttribute:()=> 'player.previous',parentNode:previous}
+    ]};
+    align(controls);assert.equal(start.style.left,'119px');assert.equal(start.style.top,'-14px');
+    align(controls);assert.equal(start.style.left,'119px');assert.equal(start.style.top,'-14px');
+    previous.getBoundingClientRect=()=>({left:822.4,top:803,width:72,height:72});
+    for(let n=0;n<5;n++){align(controls);assert.equal(start.style.left,'119px');}
+    assert.equal(previous.style,undefined,'The native Previous button must not be moved');
 });
 
 test('Playback settings route both speed icons to the custom menu and preserve unrelated actions', () => {

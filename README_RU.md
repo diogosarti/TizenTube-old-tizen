@@ -16,7 +16,7 @@
 | | |
 |---|---|
 | Название приложения | TizenTube-old-tizen |
-| Версия пакета | 2.3.21 |
+| Версия пакета | 2.3.26 |
 | Основа | [TizenTube Standalone v2.1.1](https://github.com/reisxd/TizenTube/releases/tag/v2.1.1) |
 | Лицензия | GPL-3.0-only; см. [LICENSE](LICENSE) и [уведомления сторонних компонентов](legacy/THIRD_PARTY_NOTICES.txt) |
 | Релиз | [Скачать установочный пакет](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) |
@@ -26,7 +26,7 @@
 
 В ZIP из релиза находится неподписанный WGT. Перед установкой его нужно подписать профилем сертификата Samsung, который включает DUID вашего телевизора. Личные сертификаты и подписи для конкретного устройства в архив не входят.
 
-1. Скачайте `TizenTube-old-tizen-v2.3.21.zip` из [последнего релиза](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) и извлеките `TizenTube-old-tizen-v2.3.21-resign-required.wgt`.
+1. Скачайте `TizenTube-old-tizen-v2.3.26.zip` из [последнего релиза](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) и извлеките `TizenTube-old-tizen-v2.3.26-resign-required.wgt`.
 2. Установите Tizen Studio, Samsung TV Extension и Certificate Manager.
 3. Включите Developer Mode, подключите ТВ и создайте для него профиль сертификата Samsung. См. [инструкцию по сертификатам](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/creating-certificates.html) и [подключению телевизора](https://developer.samsung.com/smarttv/develop/getting-started/using-sdk/tv-device.html).
 4. [Импортируйте WGT как проект Tizen](https://developer.samsung.com/smarttv/develop/getting-started/creating-tv-applications/importing-tv-applications.html), выберите свой профиль сертификата и соберите подписанный пакет.
@@ -47,6 +47,16 @@ YouTube запускается с включёнными модификация�
 Блокировка рекламы и другие функции TizenTube сохранены в исходниках. Полная совместимость всех функций исходного проекта не заявляется.
 
 ## Управление и диагностика
+
+В плеере есть кнопка **«В начало видео»** рядом с «Предыдущее», которая перематывает текущий ролик на 0:00.
+
+### Журнал проблемных CDN
+
+Включите **«Собирать проблемные домены GGC»** в настройках, чтобы сохранять до 50 имён Googlevideo с повторными сбоями соединения. По умолчанию сбор выключен; компьютер и Web Inspector для него не нужны. Пункт **«Проблемные CDN»** открывает полноэкранный список с переносом длинных имён, подробностями ошибок, удалением отдельных записей и очисткой с подтверждением. Записи сохраняются после перезапуска приложения. Домен в списке означает повторные сбои, а не подтверждённую блокировку.
+
+В **«Индикаторах плеера»** можно включить счётчик проблемных GGC: он виден вместе с кнопками плеера только при значении больше нуля. При включённом сборе о добавлении нового домена сообщает краткое уведомление.
+
+### Пульт и логи
 
 | Кнопка | Действие |
 |---|---|
@@ -86,10 +96,10 @@ npm --prefix legacy test
 npm --prefix legacy run build
 ```
 
-Сборка проверяет JavaScript пакета на совместимость с ES5 и создаёт `artifacts/2.3.21/TizenTube-old-tizen-v2.3.21.zip`. Подпишите подготовленный виджет своим профилем сертификата:
+Сборка проверяет JavaScript пакета на совместимость с ES5 и создаёт `artifacts/2.3.26/TizenTube-old-tizen-v2.3.26.zip`. Подпишите подготовленный виджет своим профилем сертификата:
 
 ```text
-tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.3.21/signed -- legacy/dist/widget-2.3.21
+tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.3.26/signed -- legacy/dist/widget-2.3.26
 ```
 
 Релиз собирается из загрузчика `legacy/widget`. Старые каталоги `standalone` и исходники сервисов сохранены из upstream и в этот WGT не включены.

@@ -9,10 +9,12 @@ const Logger = require('../web/logger');
 function setup(mode = 'auto', options = { extendedDiagnostics: true }) {
     const listeners = {}, sent = [], timers = new Set();
     const diagnosticSetting = Object.prototype.hasOwnProperty.call(options, 'extendedDiagnostics') ? options.extendedDiagnostics : true;
-    const storage = { value: JSON.stringify({ tlsMode: mode, extendedDiagnostics: diagnosticSetting }), getItem() { return this.value; }, setItem(key, value) { this.value = value; } };
+    const storage = { value: JSON.stringify({ tlsMode: mode, extendedDiagnostics: diagnosticSetting, collectProblemCDNs: options.collectProblemCDNs }),
+        getItem(key) { return key === 'ytaf-configuration' ? this.value : this.cdnValue || null; },
+        setItem(key, value) { if (key === 'ytaf-configuration') this.value = value; else this.cdnValue = value; } };
     const container = { addEventListener(type, callback) { listeners[type] = callback; }, appendChild() {} };
-    const win = { ArrayBuffer, Uint8Array: options.Uint8Array || Uint8Array, navigator: { userAgent: 'Synthetic test' },
-        localStorage: storage, addEventListener() {},
+    const win = { LegacyCDNJournal: require('../web/cdn-journal'), ArrayBuffer, Uint8Array: options.Uint8Array || Uint8Array, navigator: { userAgent: 'Synthetic test' },
+        localStorage: storage, addEventListener(type, fn) { if (options.windowListeners) options.windowListeners[type] = fn; },
         document: { createElement(type) {
             if (type === 'embed') return { postMessage: value => sent.push(value) };
             let url;
@@ -45,6 +47,67 @@ test('TLS startup defaults to TLS 1.2 and preserves all three explicit modes', (
             assert.equal(env.transport.summary().mode, 'auto');
         } finally { env.close(); }
     }
+});
+
+test('CDN collection defaults to off, preserves its saved choice and toggles live without losing entries', () => {
+    for (const saved of [undefined,false,true]) {
+        const env=setup('1.3',{extendedDiagnostics:false,collectProblemCDNs:saved});
+        try {
+            assert.equal(env.transport.summary().cdnCollecting,saved===true);
+            function fail(){const r=env.transport.request('GET','https://media.googlevideo.com/videoplayback',{},new ArrayBuffer(0),()=>{});env.message({type:'error',id:r.id,error:'timeout'});}
+            fail();fail();assert.equal(env.transport.summary().cdnProblems,saved===true?1:0);
+            env.transport.setCDNCollection(true);fail();
+            env.transport.setCDNCollection(false);fail();fail();
+            env.transport.setCDNCollection(true);fail();
+            assert.equal(env.transport.summary().cdnProblems,saved===true?1:0,'Disabled intervals reset incomplete candidates');
+            fail();assert.equal(env.transport.summary().cdnProblems,1);
+            env.transport.setCDNCollection(false);fail();
+            assert.equal(env.transport.problemCDNs.read().length,1,'Disabling preserves the saved journal');
+        } finally {env.close();}
+    }
+});
+
+test('CDN journal works with extended diagnostics off and excludes HTTP and non-media requests', () => {
+    let now=100000;
+    const env=setup('1.3',{extendedDiagnostics:false,collectProblemCDNs:true,Date:{now:()=>now}});
+    try {
+        function fail(url,error){const r=env.transport.request('GET',url,{},new ArrayBuffer(0),()=>{});env.message({type:'error',id:r.id,error});now++;}
+        fail('https://www.youtube.com/tv','timeout');fail('https://www.youtube.com/tv','timeout');
+        fail('https://media.googlevideo.com/generate_204','timeout');fail('https://media.googlevideo.com/generate_204','timeout');
+        assert.equal(env.transport.problemCDNs.read().length,0);
+        for(let i=0;i<2;i++){
+            const r=env.transport.request('GET','https://media.googlevideo.com/videoplayback',{},new ArrayBuffer(0),()=>{});
+            env.message({type:'headers',id:r.id,status:404,headers:''});env.message({type:'done',id:r.id});
+        }
+        assert.equal(env.transport.problemCDNs.read().length,0);
+        fail('https://media.googlevideo.com/videoplayback','SSL - The connection indicated an EOF');
+        assert.equal(env.transport.summary().cdnProblems,0);
+        fail('https://media.googlevideo.com/videoplayback','SSL - The connection indicated an EOF');
+        assert.equal(env.transport.summary().cdnProblems,1);
+        assert.equal(env.transport.problemCDNs.read()[0].reason,'tls');
+        assert.equal(env.transport.diagnosticsEnabled(),false);
+        assert.ok(env.win.localStorage.cdnValue);
+    }finally{env.close();}
+});
+
+test('CDN journal excludes seek, navigation and short aborts but captures repeated quiet handshake stalls', () => {
+    let now=100000;const windowListeners={};
+    const env=setup('1.3',{extendedDiagnostics:false,collectProblemCDNs:true,Date:{now:()=>now},windowListeners});
+    const video={paused:false,seeking:false};env.win.document.querySelector=()=>video;env.win.location={hash:'#/watch?synthetic'};
+    try{
+        function start(){const xhr=new env.win.XMLHttpRequest();xhr.open('GET','https://media.googlevideo.com/videoplayback');xhr.responseType='arraybuffer';xhr.send();return xhr;}
+        let xhr=start();now+=500;xhr.abort();
+        xhr=start();now+=16000;video.seeking=true;xhr.abort();video.seeking=false;
+        xhr=start();now+=16000;windowListeners.keydown();xhr.abort();
+        now+=4000;xhr=start();now+=16000;env.win.location.hash='#/watch?other';xhr.abort();
+        assert.equal(env.transport.problemCDNs.read().length,0);
+        for(let i=0;i<2;i++){now+=4000;xhr=start();now+=16000;xhr.abort();}
+        assert.equal(env.transport.summary().cdnProblems,1);
+        assert.equal(env.transport.problemCDNs.read()[0].reason,'tls-wait');
+        env.transport.problemCDNs.clear();
+        xhr=start();now+=16000;windowListeners.beforeunload();xhr.abort();
+        assert.equal(env.transport.problemCDNs.read().length,0);
+    }finally{env.close();}
 });
 
 test('Extended diagnostics default to off and preserve an explicit saved choice', () => {
@@ -106,6 +169,8 @@ test('XHR completion diagnostics separate assembly from slow event callbacks and
         assert.equal(events.length, 4);
         assert.ok(events.every(e => e.detail.startsWith('rid=1; id=1;')));
         assert.match(events.find(e => /event=load;/.test(e.detail)).detail, /elapsedMs=700/);
+        assert.match(records.find(e => e.code === 'net.xhr-callback' && /event=load;/.test(e.detail)).detail,
+            /rid=1; id=1; event=load; index=0; elapsedMs=700/);
         assert.equal(xhr.readyState, 1, 'Logging must preserve reopening from loadend');
     } finally { env.close(); }
 });
@@ -400,6 +465,26 @@ test('XHR decodes growing UTF-8 once without prefix copies and reuses a single b
         assert.equal(xhr.response, null, 'Binary response remains unavailable before DONE');
         env.message({ type: 'done', id: binary });
         assert.equal(xhr.response, block, 'A single complete chunk must not be copied');
+    } finally { env.close(); }
+});
+
+test('Binary XHR responses belong to the requesting frame, including single-chunk responses', () => {
+    const env = setup();
+    try {
+        const constructors = vm.runInNewContext('({ArrayBuffer, Uint8Array})');
+        const frame = Object.assign({}, env.win, constructors);
+        env.transport.install(frame);
+        for (const pieces of [[new Uint8Array([1, 2]).buffer], [new Uint8Array([1]).buffer, new Uint8Array([2]).buffer]]) {
+            const xhr = new frame.XMLHttpRequest();
+            xhr.open('GET', 'https://media.googlevideo.com/videoplayback'); xhr.responseType = 'arraybuffer'; xhr.send();
+            const id = env.sent.at(-1).id;
+            env.message({type:'headers', id, status:200, headers:''});
+            pieces.forEach(body => env.message({type:'data', id, body}));
+            env.message({type:'done', id});
+            assert.ok(xhr.response instanceof constructors.ArrayBuffer);
+            assert.deepEqual(Array.from(new constructors.Uint8Array(xhr.response)), [1, 2]);
+            assert.equal(xhr.response, xhr.response, 'Repeated reads keep response identity');
+        }
     } finally { env.close(); }
 });
 

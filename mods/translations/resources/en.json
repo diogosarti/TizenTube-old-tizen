@@ -1,4 +1,25 @@
 {
+  "cdnJournal": {
+    "title": "Problematic CDNs",
+    "counter": "Problematic GGC: {{count}}",
+    "added": "Problematic GGC added · Total: {{count}}",
+    "header": "Stored: {{count}} / 50 · Repeated failures, not confirmed blocks",
+    "collect": "Collect problematic GGC domains",
+    "showCount": "Show problematic GGC count when nonzero",
+    "enabled": "Collection enabled",
+    "disabled": "Collection disabled",
+    "close": "Close",
+    "row": "Failures: {{count}} · Last: {{date}}",
+    "details": "Failures: {{count}} · Mode: {{mode}} · {{reason}} · First: {{first}} · Last: {{last}}",
+    "empty": "No entries",
+    "remove": "Delete entry",
+    "clear": "Clear all entries",
+    "clearQuestion": "Clear the CDN journal?",
+    "cancel": "Cancel",
+    "back": "Back to list",
+    "storageError": "Journal could not be saved to TV storage",
+    "reasons": { "dns": "DNS error", "tcp": "TCP error", "tls": "TLS error", "timeout": "Request timeout", "truncated": "Incomplete response", "tls-wait": "Long wait before TLS completion", "response-wait": "Long wait for response headers" }
+  },
   "legacyNetwork": {
     "extendedDiagnostics": "Extended diagnostics",
     "title": "TLS connection",
@@ -299,6 +320,7 @@
         "miniPlayer": "Mini Player",
         "pictureInPicture": "Picture in Picture",
         "previous": "Previous",
+        "start": "Go to beginning",
         "next": "Next",
         "withTizenTube": "with TizenTube",
         "share": {
