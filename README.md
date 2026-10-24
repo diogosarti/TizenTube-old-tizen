@@ -6,7 +6,12 @@ This is a fork of [reisxd/TizenTube](https://github.com/reisxd/TizenTube), based
 
 The app runs entirely on the TV. It loads the YouTube TV interface directly and adds TizenTube modifications through a launcher adapted to the older WebKit engine. No computer, external proxy or local service is needed during viewing.
 
-**Tested device:** Samsung UE50KU6000 (KU6000 series), Tizen 2.4.0, firmware T-JZL6DEUC-1260.1. No other TV model has been confirmed.
+**Tested devices:**
+
+| TV | Tizen | Firmware | Confirmed operation |
+|---|---|---|---|
+| Samsung UE50KU6000 (KU6000 series) | 2.4.0 | T-JZL6DEUC-1260.1 | YouTube playback; TLS 1.2 recommended because TLS 1.3 stalls remain under investigation |
+| Samsung UE32M5550AU (M5550 series) | 3.0 | T-KTSDEUC family | Application operation and YouTube playback over TLS 1.3 |
 
 | | |
 |---|---|
@@ -58,9 +63,9 @@ Logs remain in memory, are hidden by default and are cleared when the app closes
 
 ## Requirements and compatibility
 
-The confirmed configuration is the KU6000/Tizen 2.4.0 above. The app needs the Samsung Tizen Web Application runtime, working media playback/MSE, supported video and audio decoders, and network access to YouTube, its media hosts and SponsorBlock.
+Operation has been confirmed on the KU6000/Tizen 2.4.0 above and on another TV running Tizen 3. The app needs the Samsung Tizen Web Application runtime, working media playback/MSE, supported video and audio decoders, and network access to YouTube, its media hosts and SponsorBlock.
 
-The manifest's Tizen 2.4 minimum is an installation requirement, not proof of compatibility with every Tizen 2.4 or newer TV. Other models, firmware versions, codecs and all video resolutions have not been verified. YouTube can change its interface and scripts independently of this project.
+The manifest's Tizen 2.4 minimum is an installation requirement, not proof of compatibility with every Tizen 2.4 or newer TV. The tests above do not cover all models, firmware versions, codecs or video resolutions. YouTube can change its interface and scripts independently of this project.
 
 On the tested setup, QR sign-in sometimes required a second attempt in the YouTube mobile app. That phone-side behavior has not been resolved. A connection failure opens diagnostics so the load can be retried manually.
 
