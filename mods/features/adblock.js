@@ -374,38 +374,70 @@ function addPreviews(items) {
 
 const brandingCache = new Map();
 const brandingRequests = new Map();
+const brandingQueue = [];
+let activeBranding = null;
+let brandingPumpTimer = null;
+
+function pumpBranding() {
+  if (activeBranding || !brandingQueue.length) return;
+  const entry = brandingQueue.shift();
+  activeBranding = entry;
+  const xhr = entry.xhr = new XMLHttpRequest();
+  xhr.open('GET', `https://sponsor.ajay.app/api/branding?videoID=${entry.videoID}`);
+  xhr.timeout = 10000;
+  xhr.responseType = 'json';
+  xhr.onload = () => {
+    const data = xhr.response;
+    entry.finish(xhr.status === 200 && data && Array.isArray(data.titles) && Array.isArray(data.thumbnails) ? data : null);
+  };
+  xhr.onerror = xhr.ontimeout = xhr.onabort = () => entry.finish(null);
+  xhr.send();
+}
+
+function scheduleBranding() {
+  if (brandingPumpTimer !== null) return;
+  brandingPumpTimer = setTimeout(() => { brandingPumpTimer = null; pumpBranding(); }, 0);
+}
 
 function getBranding(videoID) {
   const cached = brandingCache.get(videoID);
   if (cached && Date.now() - cached.at < 300000) return Promise.resolve(cached.data);
   brandingCache.delete(videoID);
   if (brandingRequests.has(videoID)) return brandingRequests.get(videoID).promise;
-  const xhr = new XMLHttpRequest();
-  const entry = { xhr };
+  // Bound retained cards/promises before constructing any queued XHR.
+  if (brandingRequests.size >= 32) return Promise.resolve(null);
+  const entry = { videoID, xhr: null };
   entry.promise = new Promise(resolve => {
-    function finish(data) {
+    entry.finish = data => {
+      if (brandingRequests.get(videoID) !== entry) return;
       brandingRequests.delete(videoID);
+      clearTimeout(entry.deadline);
+      const index = brandingQueue.indexOf(entry);
+      if (index !== -1) brandingQueue.splice(index, 1);
+      if (activeBranding === entry) activeBranding = null;
       if (data) {
         if (brandingCache.size >= 128) brandingCache.delete(brandingCache.keys().next().value);
         brandingCache.set(videoID, { at: Date.now(), data });
       }
       resolve(data);
-    }
-    xhr.open('GET', `https://sponsor.ajay.app/api/branding?videoID=${videoID}`);
-    xhr.responseType = 'json';
-    xhr.onload = () => {
-      const data = xhr.response;
-      finish(xhr.status === 200 && data && Array.isArray(data.titles) && Array.isArray(data.thumbnails) ? data : null);
+      scheduleBranding();
     };
-    xhr.onerror = xhr.ontimeout = xhr.onabort = () => finish(null);
   });
   brandingRequests.set(videoID, entry);
-  xhr.send();
+  entry.deadline = setTimeout(() => {
+    entry.finish(null);
+    if (entry.xhr) entry.xhr.abort();
+  }, 15000);
+  brandingQueue.push(entry);
+  scheduleBranding();
   return entry.promise;
 }
 
 window.addEventListener('hashchange', () => {
-  Array.from(brandingRequests.values()).forEach(entry => entry.xhr.abort());
+  Array.from(brandingRequests.values()).forEach(entry => {
+    entry.finish(null);
+    if (entry.xhr) entry.xhr.abort();
+  });
 });
 
 function deArrowify(items) {
@@ -479,13 +511,27 @@ function hqify(items) {
   }
 }
 
+function queueCard(item) {
+  if (item.tileRenderer) {
+    const r = item.tileRenderer;
+    return { tileRenderer: { contentId: r.contentId, style: r.style, metadata: r.metadata, header: r.header, onSelectCommand: r.onSelectCommand } };
+  }
+  const r = item.lockupViewModel;
+  return { lockupViewModel: { contentId: r.contentId, contentType: r.contentType, metadata: r.metadata, contentImage: r.contentImage,
+    rendererContext: { commandContext: { onTap: r.rendererContext?.commandContext?.onTap } } } };
+}
+
 function addLongPress(items) {
+  if (!configRead('enableLongPress')) return;
   for (const item of items) {
     if (!item.tileRenderer && !item.lockupViewModel) continue;
     if (item?.tileRenderer?.style !== 'TILE_STYLE_YTLR_DEFAULT' && item?.lockupViewModel?.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO') continue;
     if (item?.tileRenderer?.onLongPressCommand?.showMenuCommand?.menu?.menuRenderer?.items
       || item?.lockupViewModel?.rendererContext?.commandContext?.onLongPress?.innertubeCommand?.showMenuCommand?.menu?.menuRenderer?.items) {
-      const copiedItem = JSON.parse(JSON.stringify(item));
+      const menuItems = item.tileRenderer ? item.tileRenderer.onLongPressCommand.showMenuCommand.menu.menuRenderer.items
+        : item.lockupViewModel.rendererContext.commandContext.onLongPress.innertubeCommand.showMenuCommand.menu.menuRenderer.items;
+      if (menuItems.some(entry => entry.menuServiceItemRenderer?.serviceEndpoint?.playlistEditEndpoint?.customAction?.action === 'ADD_TO_QUEUE')) continue;
+      const copiedItem = queueCard(item);
       const button = MenuServiceItemRenderer('Add to Queue', {
         clickTrackingParams: null,
         playlistEditEndpoint: {
@@ -495,8 +541,6 @@ function addLongPress(items) {
           }
         }
       })
-      const menuItems = item.tileRenderer ? item.tileRenderer.onLongPressCommand.showMenuCommand.menu.menuRenderer.items
-        : item.lockupViewModel.rendererContext.commandContext.onLongPress.innertubeCommand.showMenuCommand.menu.menuRenderer.items;
       menuItems.push(button);
       restoreFeedbackMenuItems(item, menuItems);
       continue;
@@ -507,7 +551,7 @@ function addLongPress(items) {
       !item.lockupViewModel?.contentImage?.thumbnailViewModel?.image?.sources) continue;
     if (!item?.tileRenderer?.onSelectCommand?.watchEndpoint &&
       !item?.lockupViewModel?.rendererContext?.commandContext?.onTap?.innertubeCommand?.watchEndpoint) continue;
-    const copiedItem = JSON.parse(JSON.stringify(item));
+    const copiedItem = queueCard(item);
     const subtitleNode = copiedItem?.tileRenderer ? copiedItem.tileRenderer.metadata?.tileMetadataRenderer?.lines?.[0]?.lineRenderer?.items?.[0]?.lineItemRenderer?.text :
       copiedItem.lockupViewModel.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text?.content
     ;

@@ -2,6 +2,7 @@
 if (window.__legacyDirect) {
     function startSeekPreview() {
         let observer;
+        let stopTimer;
         function install() {
             const element = document.querySelector('ytlr-storyboard');
             const instance = element && element.__instance;
@@ -43,10 +44,31 @@ if (window.__legacyDirect) {
             return true;
         }
         if (install()) return;
-        observer = new MutationObserver(() => {
-            if (install()) observer.disconnect();
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
+        function stopWatching() {
+            if (observer) observer.disconnect();
+            observer = null;
+            clearTimeout(stopTimer);
+        }
+        function trySeek(event) {
+            if (![37, 39, 412, 417].includes(event.keyCode)) return;
+            if (install()) {
+                stopWatching();
+                document.removeEventListener('keydown', trySeek, true);
+                return;
+            }
+            if (observer) return;
+            const player = document.querySelector('ytlr-player');
+            if (!player) return;
+            observer = new MutationObserver(() => {
+                if (install()) {
+                    stopWatching();
+                    document.removeEventListener('keydown', trySeek, true);
+                }
+            });
+            observer.observe(player, { childList: true, subtree: true });
+            stopTimer = setTimeout(stopWatching, 5000);
+        }
+        document.addEventListener('keydown', trySeek, true);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startSeekPreview);
     else startSeekPreview();

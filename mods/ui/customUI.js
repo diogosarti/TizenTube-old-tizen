@@ -5,24 +5,33 @@ import { configRead } from "../config.js";
 import { ButtonRenderer, showToast } from "./ytUI.js";
 import { t } from 'i18next';
 
-function alignStartButton(controls) {
+function alignPlayerShortcuts(controls) {
     const buttons = Array.from(controls.querySelectorAll('yt-button-container'));
-    const start = buttons.find(button => button.getAttribute('aria-label') === t('player.start'));
-    const previous = buttons.find(button => button.getAttribute('aria-label') === t('player.previous'));
+    const positions = [];
     function renderer(button) {
         while (button && button.tagName !== 'YTLR-BUTTON-RENDERER') button = button.parentNode;
         return button;
     }
-    const item = renderer(start), anchor = renderer(previous);
-    if (!item || !anchor) return;
-    const box = item.getBoundingClientRect(), target = anchor.getBoundingClientRect();
-    if (!box.width || !target.width) return;
-    // Keep native focus/navigation and icon sizing, moving only this button's visual position.
-    item.__ttStartX = Math.round((item.__ttStartX || 0) + target.left - box.width - target.width / 4 - box.left);
-    item.__ttStartY = Math.round((item.__ttStartY || 0) + target.top + (target.height - box.height) / 2 - box.top);
-    item.style.position = 'relative';
-    item.style.left = item.__ttStartX + 'px';
-    item.style.top = item.__ttStartY + 'px';
+    function align(label, anchorLabel, side) {
+        const item = renderer(buttons.find(button => button.getAttribute('aria-label') === t(label)));
+        const anchor = renderer(buttons.find(button => button.getAttribute('aria-label') === t(anchorLabel)));
+        if (!item || !anchor) return;
+        const box = item.getBoundingClientRect(), target = anchor.getBoundingClientRect();
+        if (!box.width || !target.width) return;
+        const left = side < 0 ? target.left - box.width - target.width / 4 : target.left + target.width * 1.25;
+        // Preserve native focus/navigation and icon sizing, moving only the shortcut.
+        positions.push({ item,
+            x: Math.round((item.__ttShortcutX || 0) + left - box.left),
+            y: Math.round((item.__ttShortcutY || 0) + target.top + (target.height - box.height) / 2 - box.top) });
+    }
+    align('player.start', 'player.previous', -1);
+    align('cdnJournal.title', 'player.next', 1);
+    positions.forEach(({ item, x, y }) => {
+        item.__ttShortcutX = x; item.__ttShortcutY = y;
+        if (item.style.position !== 'relative') item.style.position = 'relative';
+        if (item.style.left !== x + 'px') item.style.left = x + 'px';
+        if (item.style.top !== y + 'px') item.style.top = y + 'px';
+    });
 }
 
 // Show request results alongside the player's controls without extra network checks.
@@ -42,7 +51,18 @@ if (window.__legacyDirect && parent.__legacyTLS) {
             if (badge) badge.style.display = 'none';
             return;
         }
-        alignStartButton(controls);
+        if (controls.classList.contains('zylon-hidden')) {
+            if (badge && badge.style.display !== 'none') badge.style.display = 'none';
+            return;
+        }
+        const style = window.getComputedStyle(controls);
+        if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity < 0.5) {
+            if (badge && badge.style.display !== 'none') badge.style.display = 'none';
+            return;
+        }
+        const instance = controls.__instance;
+        if (instance && instance.__ttRefreshCDNButton) instance.__ttRefreshCDNButton(state.cdnProblems > 0);
+        alignPlayerShortcuts(controls);
         if (!badge) {
             badge = document.createElement('span');
             badge.className = 'tt-media-transport';
@@ -67,24 +87,26 @@ if (window.__legacyDirect && parent.__legacyTLS) {
         }
         const text = lines.join('\n');
         if (badge.textContent !== text) badge.textContent = text;
-        const style = window.getComputedStyle(controls);
-        const displayStyle = !lines.length || controls.classList.contains('zylon-hidden') || style.display === 'none' ||
-            style.visibility === 'hidden' || +style.opacity < 0.5 ? 'none' : 'block';
+        const displayStyle = lines.length ? 'block' : 'none';
         if (badge.style.display !== displayStyle) badge.style.display = displayStyle;
     }, 500);
 }
 
 let patchAttempts = 0;
 let playerPatched = false;
+const inspectedPlayerMethods = new WeakMap();
 function applyPatches() {
-    if (playerPatched) return;
+    if (playerPatched || !configRead('enablePatchingVideoPlayer')) return;
     if (++patchAttempts > 240) {
         if (window.__legacyLog) window.__legacyLog.record('player.patch', 'Player controls pattern unavailable');
         return;
     }
     if (!window._yttv) return setTimeout(applyPatches, 250);
     const methods = Object.keys(window._yttv).filter(key => {
-        return typeof window._yttv[key] === 'function' && window._yttv[key].toString().includes('TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION');
+        const method = window._yttv[key];
+        if (typeof method !== 'function') return false;
+        if (!inspectedPlayerMethods.has(method)) inspectedPlayerMethods.set(method, method.toString().includes('TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION'));
+        return inspectedPlayerMethods.get(method);
     });
 
     if (methods.length === 0) {
@@ -110,6 +132,16 @@ function applyPatches() {
     const engagementActionButton = member(func => func.rhs.includes('props.data.engagementActions'));
     const promotedActions = member(func => func.rhs.includes('props.data.promotedActions') &&
         func.rhs.includes('TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION'));
+    const navigableIndex = promotedActions && member(func => func.rhs.includes('.' + promotedActions + '().length') && /\+\s*3\b/.test(func.rhs));
+    const navigationStep = navigableIndex && member(func => func.rhs.includes('.buttons') && func.rhs.includes('.' + navigableIndex + '('));
+    let forceRender;
+    for (let proto = origMethod.prototype; proto && !forceRender; proto = Object.getPrototypeOf(proto)) {
+        const key = Object.getOwnPropertyNames(proto).find(name => {
+            const method = Object.getOwnPropertyDescriptor(proto, name).value;
+            return typeof method === 'function' && /this\.[$\w]+\s*=\s*\{\s*[$\w]+:\s*!0,\s*[$\w]+:\s*this\.state\s*\}/.test(method.toString());
+        });
+        if (key) forceRender = proto[key];
+    }
     const mountMethod = Object.getOwnPropertyNames(origMethod.prototype).find(name => {
         const method = Object.getOwnPropertyDescriptor(origMethod.prototype, name).value;
         return typeof method === 'function' && /this\.on\(["']keydown["']/.test(method.toString());
@@ -120,13 +152,52 @@ function applyPatches() {
         if (inst.__ttPlayerActionsPatched) return inst;
         inst.__ttPlayerActionsPatched = true;
         if (promotedActions && window.__legacyDirect && parent.__legacyTLS) {
+            let visible = parent.__legacyTLS.summary().cdnProblems > 0;
+            const cdnButton = { type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_CDN',
+                button: { buttonRenderer: ButtonRenderer(false, t('cdnJournal.title'), 'INFO',
+                    { customAction: { action: 'CDN_SHOW', parameters: {} } }) } };
             const original = inst[promotedActions];
             inst[promotedActions] = function () {
-                return (original.apply(this, arguments) || []).concat([{
-                    type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_SEEK_START',
-                    button: { buttonRenderer: ButtonRenderer(false, t('player.start'), 'REPLAY',
-                        { customAction: { action: 'SKIP', parameters: { time: 0 } } }) }
-                }]);
+                const actions = original.apply(this, arguments) || [];
+                visible = parent.__legacyTLS.summary().cdnProblems > 0;
+                return visible ? actions.concat([cdnButton]) : actions;
+            };
+            inst.__ttRefreshCDNButton = function (value) {
+                if (visible === value) return;
+                visible = value;
+                if (forceRender) forceRender.call(this);
+            };
+            if (navigationStep && navigableIndex && nextButtonName) {
+                const originalStep = inst[navigationStep];
+                inst[navigationStep] = function (direction) {
+                    const actions = this[promotedActions]();
+                    const cdnIndex = actions.indexOf(cdnButton);
+                    const selected = this.state.selectedIndex;
+                    // Without a Next anchor the shortcut keeps its native position.
+                    if (cdnIndex < 0 || selected < 0 || !this[nextButtonName]()) return originalStep.apply(this, arguments);
+                    const buttons = this.buttons, nextIndex = actions.length + 2;
+                    if (nextIndex >= buttons.length) return originalStep.apply(this, arguments);
+                    const order = [];
+                    for (let index = 0; index < buttons.length; index++) {
+                        if (index !== cdnIndex) order.push(index);
+                        if (index === nextIndex) order.push(cdnIndex);
+                    }
+                    const current = order.indexOf(selected);
+                    if (current < 0) return originalStep.apply(this, arguments);
+                    for (let index = current + direction; index >= 0 && index < order.length; index += direction) {
+                        if (this[navigableIndex](order[index])) return order[index];
+                    }
+                    return selected;
+                };
+            }
+        }
+        if (promotedActions && window.__legacyDirect && parent.__legacyTLS) {
+            const original = inst[promotedActions];
+            const startButton = { type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_SEEK_START',
+                button: { buttonRenderer: ButtonRenderer(false, t('player.start'), 'REPLAY',
+                    { customAction: { action: 'SKIP', parameters: { time: 0 } } }) } };
+            inst[promotedActions] = function () {
+                return (original.apply(this, arguments) || []).concat([startButton]);
             };
         }
         const pipCommand = {

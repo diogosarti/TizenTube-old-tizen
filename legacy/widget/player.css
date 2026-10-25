@@ -1,5 +1,5 @@
-/* Keep the native layout for visibility detection; the shell draws its own spinner. */
-yt-spinner [idomkey="dotted spinner"],
-yt-spinner [idomkey="solid spinner"] { opacity: 0 !important; visibility: hidden !important; animation: none !important; }
-yt-spinner [idomkey="dotted spinner"] *,
-yt-spinner [idomkey="solid spinner"] * { animation: none !important; }
+/* Preserve the host's layout/visibility for status detection. The shell owns
+   both the spinner and text, including the native low-memory text fallback. */
+yt-spinner, yt-spinner * { color: transparent !important; text-shadow: none !important; }
+yt-spinner > * { opacity: 0 !important; visibility: hidden !important; }
+yt-spinner * { -webkit-animation: none !important; animation: none !important; }

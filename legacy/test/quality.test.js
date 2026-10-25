@@ -36,12 +36,14 @@ test('Codec default matches the settings key and preserves an explicit saved pre
     }
 });
 
-test('TLS settings default to TLS 1.2 and retain explicit Auto and TLS 1.3 selections', () => {
+test('TLS settings default to Auto and retain every explicit mode', () => {
     const source = fs.readFileSync(path.join(__dirname, '../../mods/config.js'), 'utf8').replace(/^export /gm, '');
-    for (const saved of [{}, { tlsMode: 'auto' }, { tlsMode: '1.3' }]) {
+    for (const saved of [{}, { tlsMode: 'auto' }, { tlsMode: '1.2' }, { tlsMode: '1.3' }, { tlsMode: 'invalid' }]) {
         const storage = { 'ytaf-configuration': JSON.stringify(saved) };
         const read = vm.runInNewContext(source + '\nconfigRead;', { window: { localStorage: storage }, console: { warn() {} } });
-        assert.equal(read('tlsMode'), saved.tlsMode || '1.2');
-        assert.equal(JSON.parse(storage['ytaf-configuration']).tlsMode, saved.tlsMode || '1.2');
+        const expected = ['auto', '1.2', '1.3'].includes(saved.tlsMode) ? saved.tlsMode : 'auto';
+        assert.equal(read('tlsMode'), expected);
+        assert.equal(JSON.parse(storage['ytaf-configuration']).tlsMode, expected);
+        assert.equal(read('extendedDiagnostics'), false);
     }
 });

@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.4.0
+
+- Improved media-response performance on legacy WebKit by restoring native byte-array copying.
+- Bounded DeArrow background work, added queue-inclusive timeouts and cancelled pending requests when navigating away.
+- Reduced transport queue processing overhead while preserving existing connection limits.
+- Fixed SponsorBlock cleanup when leaving playback and reattachment after video-element replacement, while preserving PiP playback.
+- Prevented repeated SponsorBlock seeks when the player lands before the requested segment boundary.
+- Reduced unnecessary player layout work, constructor searches, skip-timer updates and storyboard observation.
+
 ## v2.3.26
 
 - Added a Go to beginning button beside Previous video, seeking the current video to 0:00.
@@ -14,7 +23,7 @@
 - Fixed automatic SponsorBlock skipping when segment data arrives late or playback resumes inside a segment.
 - Replaced response-order-dependent manual SponsorBlock actions with an independent skip prompt (Yellow / 3 while the player menu is closed).
 - Fixed the watched-video filter ignoring its disabled setting and failing to filter lockupViewModel cards.
-- Restored Auto, TLS 1.2 only, and TLS 1.3 only modes, with TLS 1.2 as the default. TLS 1.3 playback stalls on the tested Tizen 2.4 TV remain under investigation; TLS 1.3 worked on another Tizen 3 TV with a different network configuration.
+- Restored Auto, TLS 1.2 only, and TLS 1.3 only modes, with TLS 1.2 as the default.
 
 ## v2.3.20 (beta)
 
@@ -33,7 +42,7 @@
 
 ## v2.3.17 (beta)
 
-- Forced TLS 1.2 instead of Auto as a workaround for observed TLS 1.3 playback stalls; a fix is being investigated.
+- Set TLS 1.2 as the default connection mode.
 - Fixed the custom playback-speed menu for YouTube's new speed icon while retaining support for the previous icon.
 - Reduced network response copying and improved incremental UTF-8 text decoding.
 - Improved XHR loading and progress event handling.

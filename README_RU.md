@@ -2,7 +2,7 @@
 
 [English README](README.md)
 
-Это форк [reisxd/TizenTube](https://github.com/reisxd/TizenTube), основанный на **TizenTube Standalone v2.1.1** и переделанный для старых телевизоров Samsung. Главное отличие — **воспроизведение YouTube с работающим SponsorBlock на Tizen 2.4.0**. **По умолчанию принудительно используется TLS 1.2**, пока исследуются остановки воспроизведения в режиме TLS 1.3; TLS 1.3 остаётся доступным для ручного тестирования. Также сохранены последующие изменения модулей исходного проекта.
+Это форк [reisxd/TizenTube](https://github.com/reisxd/TizenTube), основанный на **TizenTube Standalone v2.1.1** и переделанный для старых телевизоров Samsung. Главное отличие — **воспроизведение YouTube с работающим SponsorBlock на Tizen 2.4.0**. Также сохранены последующие изменения модулей исходного проекта.
 
 Приложение работает автономно на телевизоре: напрямую загружает интерфейс YouTube TV и подключает модификации TizenTube через загрузчик, адаптированный для старого WebKit. Во время просмотра компьютер, внешний прокси и локальный сервис не нужны.
 
@@ -10,13 +10,13 @@
 
 | Телевизор | Tizen | Прошивка | Подтверждённая работа |
 |---|---|---|---|
-| Samsung UE50KU6000 (серия KU6000) | 2.4.0 | T-JZL6DEUC-1260.1 | Воспроизведение YouTube; рекомендуется TLS 1.2, остановки при TLS 1.3 ещё исследуются |
+| Samsung UE50KU6000 (серия KU6000) | 2.4.0 | T-JZL6DEUC-1260.1 | Воспроизведение YouTube через TLS 1.3 |
 | Samsung UE32M5550AU (серия M5550) | 3.0 | Семейство T-KTSDEUC | Работа приложения и воспроизведение YouTube через TLS 1.3 |
 
 | | |
 |---|---|
 | Название приложения | TizenTube-old-tizen |
-| Версия пакета | 2.3.26 |
+| Версия пакета | 2.4.0 |
 | Основа | [TizenTube Standalone v2.1.1](https://github.com/reisxd/TizenTube/releases/tag/v2.1.1) |
 | Лицензия | GPL-3.0-only; см. [LICENSE](LICENSE) и [уведомления сторонних компонентов](legacy/THIRD_PARTY_NOTICES.txt) |
 | Релиз | [Скачать установочный пакет](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) |
@@ -26,7 +26,7 @@
 
 В ZIP из релиза находится неподписанный WGT. Перед установкой его нужно подписать профилем сертификата Samsung, который включает DUID вашего телевизора. Личные сертификаты и подписи для конкретного устройства в архив не входят.
 
-1. Скачайте `TizenTube-old-tizen-v2.3.26.zip` из [последнего релиза](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) и извлеките `TizenTube-old-tizen-v2.3.26-resign-required.wgt`.
+1. Скачайте `TizenTube-old-tizen-v2.4.0.zip` из [последнего релиза](https://github.com/numbereleven-a/TizenTube-old-tizen/releases/latest) и извлеките `TizenTube-old-tizen-v2.4.0-resign-required.wgt`.
 2. Установите Tizen Studio, Samsung TV Extension и Certificate Manager.
 3. Включите Developer Mode, подключите ТВ и создайте для него профиль сертификата Samsung. См. [инструкцию по сертификатам](https://developer.samsung.com/smarttv/develop/getting-started/setting-up-sdk/creating-certificates.html) и [подключению телевизора](https://developer.samsung.com/smarttv/develop/getting-started/using-sdk/tv-device.html).
 4. [Импортируйте WGT как проект Tizen](https://developer.samsung.com/smarttv/develop/getting-started/creating-tv-applications/importing-tv-applications.html), выберите свой профиль сертификата и соберите подписанный пакет.
@@ -79,7 +79,7 @@ YouTube запускается с включёнными модификация�
 
 На проверенной конфигурации вход через QR в мобильном приложении YouTube иногда требовал второй попытки. Эта проблема на стороне телефона не устранена. При ошибке подключения открывается диагностика, откуда можно вручную повторить загрузку.
 
-HTTPS-запросы API и видео через MSE используют встроенный ARM-модуль NaCl. Зелёная → Сеть / TLS: Авто (согласование TLS 1.2–1.3), только TLS 1.2 (по умолчанию) и только TLS 1.3. На проверенном ТВ с Tizen 2.4 выявлены остановки воспроизведения при TLS 1.3, поэтому по умолчанию выбран TLS 1.2. На другом ТВ с Tizen 3 пользователь не наблюдал проблем с TLS 1.3; там отличались сеть и настройки обработки трафика, поэтому результат не гарантирует совместимость со всеми ТВ Tizen 3. Режим можно переключить в настройках; сохранённый выбор сохраняется. Принудительные режимы разрешают только выбранную версию. Проверка сертификатов и имени хоста включена во всех режимах. Согласованный TLS показывается отдельно для API и видео. Ресурсы DOM используют системный стек с неизвестной версией TLS. См. [руководство по TLS](legacy/README.md).
+HTTPS-запросы API и видео через MSE используют встроенный ARM-модуль NaCl. Зелёная → Сеть / TLS: Авто (по умолчанию, согласование TLS 1.2–1.3), только TLS 1.2 и только TLS 1.3. Воспроизведение через TLS 1.3 проверено на перечисленных выше телевизорах с Tizen 2.4 и Tizen 3. Режим можно переключить в настройках; сохранённый выбор сохраняется. Принудительные режимы разрешают только выбранную версию. Проверка сертификатов и имени хоста включена во всех режимах. Согласованный TLS показывается отдельно для API и видео. Ресурсы DOM используют системный стек с неизвестной версией TLS. См. [руководство по TLS](legacy/README.md).
 
 ## Исходный проект
 
@@ -96,10 +96,10 @@ npm --prefix legacy test
 npm --prefix legacy run build
 ```
 
-Сборка проверяет JavaScript пакета на совместимость с ES5 и создаёт `artifacts/2.3.26/TizenTube-old-tizen-v2.3.26.zip`. Подпишите подготовленный виджет своим профилем сертификата:
+Сборка проверяет JavaScript пакета на совместимость с ES5 и создаёт `artifacts/2.4.0/TizenTube-old-tizen-v2.4.0.zip`. Подпишите подготовленный виджет своим профилем сертификата:
 
 ```text
-tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.3.26/signed -- legacy/dist/widget-2.3.26
+tizen package -t wgt -s YOUR_CERTIFICATE_PROFILE -o artifacts/2.4.0/signed -- legacy/dist/widget-2.4.0
 ```
 
 Релиз собирается из загрузчика `legacy/widget`. Старые каталоги `standalone` и исходники сервисов сохранены из upstream и в этот WGT не включены.

@@ -36,6 +36,7 @@ test('Seek preview uses HTTPS without mutating shared frames and shows signed ti
 });
 
 test('Player actions preserve constructor identity and native listeners when patched after mount', () => {
+    let cdnCount=0;
     const parser = fs.readFileSync(path.resolve(__dirname, '../../mods/utils/ASTParser.js'), 'utf8')
         .replace(/^import[^\n]*\n/gm, '').replace('export function', 'function');
     const extractAssignedFunctions = vm.runInNewContext(parser + '\nextractAssignedFunctions;', {
@@ -45,6 +46,7 @@ test('Player actions preserve constructor identity and native listeners when pat
         this.props = props;
         this.on = (type, listener) => this.listeners.push(listener);
         this.listeners = [];
+        this.state={selectedIndex:-1};this.refreshes=0;
         this.keyHandler = function () {};
         this.subscription = function () { const marker='TRANSPORT_CONTROLS_BUTTON_TYPE_SUBSCRIBE'; return this.props.data.promotedActions[0].type; };
         this.promoted = function () { const marker = 'TRANSPORT_CONTROLS_BUTTON_TYPE_FEATURED_ACTION'; return this.props.data.promotedActions; };
@@ -54,16 +56,29 @@ test('Player actions preserve constructor identity and native listeners when pat
             return function () { return this.props.data.settingActions; };
         }();
         this.engagement = function () { return this.props.data.engagementActions; };
+        this.previous = function () { const data=this.props.data; return false ? data.skipNextButton : data.skipPreviousButton; };
+        this.next = function () { const data=this.props.data; return false ? data.skipPreviousButton : data.skipNextButton; };
+        this.canIndex = function (index) {
+            const length=this.promoted().length;
+            return index<length||index>=length+3 ? true : index===length ? !!this.previous() : index===length+1 ? true : !!this.next();
+        };
+        this.step = function (direction) {
+            const buttons=this.buttons,current=this.state.selectedIndex;
+            for(let index=current+direction;index>=0&&index<buttons.length;index+=direction)if(this.canIndex(index))return index;
+            return current;
+        };
+        Object.defineProperty(this,'buttons',{get:()=>Array(this.promoted().length+3+this.engagement().length+this.settings().length).fill({})});
     }
     NativeActions.prototype.mount = function () { this.on('keydown', this.keyHandler); };
-    const props = () => ({ data: { promotedActions: [{type:'native-promoted'}], settingActions: [{ type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS' }], engagementActions: [] } });
+    NativeActions.prototype.forceRender=function(){this.gD={GF:!0,Tv:this.state};this.refreshes++;};
+    const props = () => ({ data: { promotedActions: [{type:'native-promoted'}], settingActions: [{ type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS' }], engagementActions: [],skipPreviousButton:{},skipNextButton:{} } });
     const existing = new NativeActions(props()); existing.mount();
     const popup = existing.openSettings;
     const subscription = existing.subscription;
     const window = { __legacyDirect: true, _yttv: { actions: NativeActions } };
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/ui/customUI.js'), 'utf8').replace(/^import[^\n]*\n/gm, '');
     vm.runInNewContext(source, {
-        window, parent: { __legacyTLS: {} }, setInterval() {},
+        window, parent: { __legacyTLS: {summary:()=>({cdnProblems:cdnCount})} }, setInterval() {},
         document: { readyState: 'complete', querySelectorAll: () => [{ __instance: existing }] },
         configRead: key => ['enablePatchingVideoPlayer', 'enableMPButton', 'enableSpeedControlsButton', 'enableSuperThanksButton', 'enableAIAskButton'].includes(key),
         extractAssignedFunctions, ButtonRenderer: (_toggle, _text, icon, command) => ({ icon, command }), t: key => key
@@ -86,16 +101,42 @@ test('Player actions preserve constructor identity and native listeners when pat
         assert.equal(instance.promoted()[1].button.buttonRenderer.command.customAction.action,'SKIP');
         assert.equal(instance.promoted()[1].button.buttonRenderer.command.customAction.parameters.time,0);
         assert.equal(instance.promoted()[1].button.buttonRenderer.icon,'REPLAY');
+        assert.equal(instance.promoted()[1],instance.promoted()[1],'Reuse the shortcut renderer across native reads');
         assert.equal(instance.props.data.promotedActions.length,1,'The shortcut must not mutate or duplicate native actions');
     }
     const loading = new NativeActions({data:{settingActions:[],engagementActions:[]}});loading.mount();
     assert.equal(loading.promoted().length,1,'A missing native action list during loading must not break the player');
+    assert.ok(!next.promoted().some(item=>item.type==='TRANSPORT_CONTROLS_BUTTON_TYPE_TT_CDN'));
+    cdnCount=2;next.__ttRefreshCDNButton(true);
+    const cdnAction=()=>next.promoted().find(item=>item.type==='TRANSPORT_CONTROLS_BUTTON_TYPE_TT_CDN');
+    assert.equal(cdnAction().button.buttonRenderer.command.customAction.action,'CDN_SHOW');
+    assert.equal(cdnAction(),cdnAction(),'Reuse the CDN renderer while the journal is nonempty');
+    assert.equal(next.promoted().filter(item=>item.type==='TRANSPORT_CONTROLS_BUTTON_TYPE_TT_CDN').length,1);
+    assert.ok(!next.engagement().some(item=>item.type==='TRANSPORT_CONTROLS_BUTTON_TYPE_TT_CDN'),'The CDN action must not enlarge the rating group');
+    assert.equal(next.refreshes,1);next.__ttRefreshCDNButton(true);assert.equal(next.refreshes,1);
+    const actions=next.promoted(),cdnIndex=actions.indexOf(cdnAction()),startIndex=actions.length-1;
+    const previousIndex=actions.length,playIndex=previousIndex+1,nextIndex=previousIndex+2,engagementIndex=previousIndex+3;
+    const visualOrder=[0,startIndex,previousIndex,playIndex,nextIndex,cdnIndex,engagementIndex];
+    for(let index=0;index<visualOrder.length-1;index++) {
+        next.state.selectedIndex=visualOrder[index];assert.equal(next.step(1),visualOrder[index+1],'Right must follow the visible shortcut positions');
+        next.state.selectedIndex=visualOrder[index+1];assert.equal(next.step(-1),visualOrder[index],'Left must return along the same route');
+    }
+    next.state.selectedIndex=nextIndex;
+    next.state.selectedIndex=next.step(1);
+    assert.equal(next.promoted()[next.state.selectedIndex].button.buttonRenderer.command.customAction.action,'CDN_SHOW','The selected shortcut must execute its own command');
+    next.props.data.skipPreviousButton=null;next.state.selectedIndex=playIndex;assert.equal(next.step(-1),startIndex,'Hidden Previous must remain skipped');
+    next.props.data.skipNextButton=null;next.state.selectedIndex=startIndex;assert.equal(next.step(-1),cdnIndex,'Without a Next anchor retain the original shortcut order');
+    cdnCount=0;next.__ttRefreshCDNButton(false);
+    assert.equal(next.refreshes,2);
+    assert.ok(!next.promoted().some(item=>item.type==='TRANSPORT_CONTROLS_BUTTON_TYPE_TT_CDN'));
+    assert.ok(!next.props.data.engagementActions.some(item=>item.type==='TRANSPORT_CONTROLS_BUTTON_TYPE_TT_CDN'));
+    next.state.selectedIndex=0;assert.equal(next.step(1),1,'An empty journal must retain native navigation');
 });
 
 test('Player CDN counter respects its independent setting and stays hidden at zero', () => {
-    let tick, showCount=true;
+    let tick, showCount=true, hidden=false, scans=0, refreshes=0;
     const state={cdnProblems:0,cdnAddedAt:0,video:'TLS 1.3'};
-    const controls={classList:{contains:()=>false},querySelectorAll:()=>[]};
+    const controls={classList:{contains:()=>hidden},querySelectorAll:()=>{scans++;return [];},__instance:{__ttRefreshCDNButton(){refreshes++;}}};
     const badge={style:{},textContent:''};
     const source=fs.readFileSync(path.resolve(__dirname,'../../mods/ui/customUI.js'),'utf8').replace(/^import[^\n]*\n/gm,'');
     vm.runInNewContext(source,{
@@ -109,24 +150,41 @@ test('Player CDN counter respects its independent setting and stays hidden at ze
     state.cdnProblems=1;tick();assert.match(badge.textContent,/cdnJournal.counter:1/);
     showCount=false;tick();assert.doesNotMatch(badge.textContent,/cdnJournal.counter/);
     assert.match(badge.textContent,/legacyNetwork.playerVideo/);
+    const oldScans=scans,oldRefreshes=refreshes;
+    hidden=true;state.cdnProblems=3;tick();tick();
+    assert.equal(scans,oldScans,'Hidden controls must not scan or measure shortcut elements');
+    assert.equal(refreshes,oldRefreshes,'Hidden controls must not force native renders');
+    assert.equal(badge.style.display,'none');
 });
 
-test('Go to beginning is aligned beside Previous without position drift', () => {
+test('Player shortcuts align beside Previous and Next without position drift', () => {
     const source=fs.readFileSync(path.resolve(__dirname,'../../mods/ui/customUI.js'),'utf8').replace(/^import[^\n]*\n/gm,'');
-    const align=vm.runInNewContext(source+'\nalignStartButton;',{
+    const align=vm.runInNewContext(source+'\nalignPlayerShortcuts;',{
         window:{addEventListener(){}},document:{readyState:'loading'},t:key=>key
     });
     const start={tagName:'YTLR-BUTTON-RENDERER',style:{},getBoundingClientRect(){return {left:613+(parseFloat(this.style.left)||0),top:817+(parseFloat(this.style.top)||0),width:72,height:72};}};
     const previous={tagName:'YTLR-BUTTON-RENDERER',getBoundingClientRect:()=>({left:822,top:803,width:72,height:72})};
+    const cdn={tagName:'YTLR-BUTTON-RENDERER',style:{},getBoundingClientRect(){return {left:1308+(parseFloat(this.style.left)||0),top:817+(parseFloat(this.style.top)||0),width:72,height:72};}};
+    const next={tagName:'YTLR-BUTTON-RENDERER',getBoundingClientRect:()=>({left:1026,top:803,width:72,height:72})};
+    let writes=0;
+    for(const item of [start,cdn]){
+        const values={};
+        for(const name of ['position','left','top'])Object.defineProperty(item.style,name,{get:()=>values[name],set:value=>{values[name]=value;writes++;}});
+    }
     const controls={querySelectorAll:()=>[
         {getAttribute:()=> 'player.start',parentNode:start},
-        {getAttribute:()=> 'player.previous',parentNode:previous}
+        {getAttribute:()=> 'player.previous',parentNode:previous},
+        {getAttribute:()=> 'cdnJournal.title',parentNode:cdn},
+        {getAttribute:()=> 'player.next',parentNode:next}
     ]};
     align(controls);assert.equal(start.style.left,'119px');assert.equal(start.style.top,'-14px');
+    assert.equal(cdn.style.left,'-192px');assert.equal(cdn.style.top,'-14px');
     align(controls);assert.equal(start.style.left,'119px');assert.equal(start.style.top,'-14px');
     previous.getBoundingClientRect=()=>({left:822.4,top:803,width:72,height:72});
     for(let n=0;n<5;n++){align(controls);assert.equal(start.style.left,'119px');}
     assert.equal(previous.style,undefined,'The native Previous button must not be moved');
+    assert.equal(next.style,undefined,'The native Next button must not be moved');
+    assert.equal(writes,6,'Stable positions must not repeatedly invalidate CSS layout');
 });
 
 test('Playback settings route both speed icons to the custom menu and preserve unrelated actions', () => {
@@ -170,8 +228,14 @@ test('Guide JSON hook accepts unrelated values and preserves unknown guide entri
 test('DeArrow updates video cards, deduplicates and caches branding, and cancels pending navigation work', async () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../mods/features/adblock.js'), 'utf8');
     const requests = []; let enabled = true, now = 1000, navigation;
+    const timers = new Map(); let timerID = 0;
+    function pump() {
+        const entry = Array.from(timers).find(([, timer]) => timer.delay === 0);
+        if (entry) { timers.delete(entry[0]); entry[1].fn(); }
+    }
     const deArrowify = vm.runInNewContext(source.slice(source.indexOf('const brandingCache'), source.indexOf('function hqify(')) + '\ndeArrowify;', {
         configRead: () => enabled,
+        setTimeout(fn, delay) { timers.set(++timerID, { fn, delay }); return timerID; }, clearTimeout(id) { timers.delete(id); },
         Date: { now: () => now }, window: { addEventListener(type, fn) { navigation = fn; } },
         XMLHttpRequest: function () {
             this.open = (method, url) => { this.url = url; };
@@ -187,10 +251,14 @@ test('DeArrow updates video cards, deduplicates and caches branding, and cancels
         { tileRenderer: { style: 'TILE_STYLE_YTLR_CHANNEL' } }, { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST' } }];
     deArrowify(items);
     deArrowify(items);
-    assert.equal(requests.length, 2, 'Identical pending video IDs must share one request');
-    for (const xhr of requests) {
+    pump();
+    assert.equal(requests.length, 1, 'Only one branding XHR may run at a time');
+    for (let i = 0; i < 2; i++) {
+        const xhr = requests[i];
+        assert.equal(xhr.timeout, 10000);
         xhr.status = 200; xhr.response = { titles: [{ title: 'Revised title', votes: 2 }], thumbnails: [{ timestamp: 15, votes: 3 }] };
         xhr.onload();
+        pump();
     }
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(requests.length, 2);
@@ -203,10 +271,110 @@ test('DeArrow updates video cards, deduplicates and caches branding, and cancels
     enabled = false; deArrowify(items);
     assert.equal(requests.length, 2, 'Disabled DeArrow must not issue requests');
     enabled = true; now += 300001; deArrowify(items);
-    assert.equal(requests.length, 4, 'Expired entries must be requested again');
+    pump();
+    assert.equal(requests.length, 3, 'Expired entries must be requested again, serially');
     navigation();
     assert.ok(requests.slice(2).every(xhr => xhr.aborted), 'Navigation must abort all pending branding requests');
+    pump(); assert.equal(timers.size, 0, 'Navigation must settle queued promises and deadlines');
     await new Promise(resolve => setImmediate(resolve));
+});
+
+test('DeArrow bounds retained work and expires the entire queue before creating more XHRs', async () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../mods/features/adblock.js'), 'utf8');
+    const timers = new Map(), requests = []; let timerID = 0, navigation;
+    const api = vm.runInNewContext(source.slice(source.indexOf('const brandingCache'), source.indexOf('function deArrowify(')) +
+        '\n({getBranding, count:()=>brandingRequests.size});', {
+        window:{addEventListener(type,fn){navigation=fn;}},
+        setTimeout(fn,delay){timers.set(++timerID,{fn,delay});return timerID;},clearTimeout(id){timers.delete(id);},
+        XMLHttpRequest:function(){this.open=()=>{};this.send=()=>requests.push(this);this.abort=()=>{this.aborted=true;this.onabort();};}
+    });
+    const promises = Array.from({length:400},(_,i)=>api.getBranding('synthetic-'+i));
+    assert.equal(api.count(),32); assert.equal(requests.length,0);
+    function run(delay){for(const [id,timer] of Array.from(timers))if(timer.delay===delay&&timers.delete(id))timer.fn();}
+    run(0); assert.equal(requests.length,1);assert.equal(requests[0].timeout,10000);
+    run(15000);run(0);
+    assert.equal(api.count(),0);assert.equal(timers.size,0);assert.equal(requests.length,1);assert.ok(requests[0].aborted);
+    assert.ok((await Promise.all(promises)).every(value=>value===null));
+    const cancelled=[api.getBranding('next-A'),api.getBranding('next-B')];navigation();run(0);
+    assert.ok((await Promise.all(cancelled)).every(value=>value===null));assert.equal(requests.length,1);assert.equal(timers.size,0);
+});
+
+test('Long-press queue actions honor the switch and do not embed menus or duplicate actions', () => {
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/features/adblock.js'),'utf8');
+    let enabled=false;
+    const start=source.indexOf('function queueCard('),end=source.indexOf('\nfunction ',source.indexOf('function addLongPress(')+1);
+    const add=vm.runInNewContext(source.slice(start,end<0?undefined:end)+'\naddLongPress;',{
+        configRead:()=>enabled,JSON:{parse(){throw Error('Unexpected deep copy');},stringify(){throw Error('Unexpected deep copy');}},
+        MenuServiceItemRenderer:(text,serviceEndpoint)=>({menuServiceItemRenderer:{serviceEndpoint}}),restoreFeedbackMenuItems(){}
+    });
+    const items=[{tileRenderer:{style:'TILE_STYLE_YTLR_DEFAULT',contentId:'tile',metadata:{title:'Title'},onSelectCommand:{watchEndpoint:{videoId:'tile'}},
+        onLongPressCommand:{showMenuCommand:{menu:{menuRenderer:{items:[]}}}}}},
+        {lockupViewModel:{contentType:'LOCKUP_CONTENT_TYPE_VIDEO',contentId:'lockup',rendererContext:{commandContext:{onTap:{innertubeCommand:{watchEndpoint:{videoId:'lockup'}}},
+            onLongPress:{innertubeCommand:{showMenuCommand:{menu:{menuRenderer:{items:[]}}}}}}}}}];
+    add(items);
+    assert.equal(items[0].tileRenderer.onLongPressCommand.showMenuCommand.menu.menuRenderer.items.length,0);
+    enabled=true;add(items);add(items);
+    const tileMenu=items[0].tileRenderer.onLongPressCommand.showMenuCommand.menu.menuRenderer.items;
+    const lockupMenu=items[1].lockupViewModel.rendererContext.commandContext.onLongPress.innertubeCommand.showMenuCommand.menu.menuRenderer.items;
+    assert.equal(tileMenu.length,1);assert.equal(lockupMenu.length,1);
+    const tile=tileMenu[0].menuServiceItemRenderer.serviceEndpoint.playlistEditEndpoint.customAction.parameters.tileRenderer;
+    const lockup=lockupMenu[0].menuServiceItemRenderer.serviceEndpoint.playlistEditEndpoint.customAction.parameters.lockupViewModel;
+    assert.equal(tile.onLongPressCommand,undefined);assert.equal(tile.onSelectCommand.watchEndpoint.videoId,'tile');
+    assert.equal(lockup.rendererContext.commandContext.onLongPress,undefined);
+    assert.equal(lockup.rendererContext.commandContext.onTap.innertubeCommand.watchEndpoint.videoId,'lockup');
+    assert.doesNotThrow(()=>JSON.stringify(items));
+});
+
+test('Disabled player patch does not scan, and unchanged constructors are inspected only once', () => {
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/ui/customUI.js'),'utf8').replace(/^import[^\n]*\n/gm,'');
+    let enabled=false,scans=0;const pending=[];
+    function method(){const fn=function(){};fn.toString=()=>{scans++;return 'function(){}';};return fn;}
+    const methods=Object.fromEntries(Array.from({length:100},(_,i)=>[i,method()]));
+    const context={window:{_yttv:methods},document:{readyState:'complete'},configRead:()=>enabled,setTimeout(fn){pending.push(fn);}};
+    vm.createContext(context);vm.runInContext(source,context);assert.equal(scans,0);assert.equal(pending.length,0);
+    enabled=true;vm.runInContext('applyPatches()',context);
+    for(let i=0;i<10;i++)pending.shift()();
+    assert.equal(scans,100);methods[0]=method();pending.shift()();assert.equal(scans,101);
+});
+
+test('Missing storyboard is watched only inside the player during a bounded seek attempt', () => {
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/ui/seekPreview.js'),'utf8');
+    let key,observed=0,stopped=0,timeout;const player={};
+    vm.runInNewContext(source,{window:{__legacyDirect:true},
+        document:{readyState:'complete',querySelector:s=>s==='ytlr-player'?player:null,addEventListener(type,fn){key=fn;},removeEventListener(){}},
+        MutationObserver:class{observe(target){assert.equal(target,player);observed++;}disconnect(){stopped++;}},
+        setTimeout(fn,ms){assert.equal(ms,5000);timeout=fn;return 1;},clearTimeout(){}
+    });
+    assert.equal(observed,0);key({keyCode:40});assert.equal(observed,0);
+    key({keyCode:39});key({keyCode:39});assert.equal(observed,1);timeout();assert.equal(stopped,1);
+    key({keyCode:37});assert.equal(observed,2);
+});
+
+test('Legacy byte-array set uses native copies while preserving generic compatibility', () => {
+    const frame=vm.runInNewContext('({Uint8Array,Int8Array,Object})');
+    const native=Uint8Array.prototype.set;
+    let fast=0,compatible=0;
+    Object.defineProperty(frame.Uint8Array.prototype,'set',{value:function(source,offset){compatible++;return native.call(this,source,offset);},configurable:false,writable:true,enumerable:true});
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/legacyDirectBootstrap.js'),'utf8')
+        .replace(/^import[^\n]*\n/gm,'').split('// Keep YouTube')[0];
+    let ready;
+    vm.runInNewContext(source,{window:{addEventListener(type,fn){ready=fn;}},document:{readyState:'loading'},parent:{__legacyTLS:{},Object,Uint8Array:{prototype:{set:function(source,offset){fast++;return native.call(this,source,offset);}}}},
+        Uint8Array:frame.Uint8Array,Object:frame.Object});
+    const target=new frame.Uint8Array(5);
+    target.set(new Uint8Array([1,2,3]),1);
+    assert.deepEqual(Array.from(target),[0,1,2,3,0]);assert.equal(fast,1);assert.equal(compatible,0);
+    target.set([7,8],0);assert.equal(compatible,1);
+    target.set(new frame.Int8Array([9]),0);assert.equal(compatible,2);
+    target.set(new Uint8Array([4]),'0');assert.equal(compatible,3);
+    target.set(target.subarray(0,3),1);
+    assert.deepEqual(Array.from(target),[4,4,8,2,0]);assert.equal(fast,2);
+    assert.throws(()=>target.set(new Uint8Array(6)),{name:'RangeError'});
+    assert.equal(Uint8Array.prototype.set,native,'The widget byte-array prototype stays unchanged');
+    assert.equal(Object.getOwnPropertyDescriptor(frame.Uint8Array.prototype,'set').enumerable,true);
+    assert.equal(Object.getOwnPropertyDescriptor(frame.Uint8Array.prototype,'set').configurable,false);
+    const installed=frame.Uint8Array.prototype.set;ready();assert.equal(frame.Uint8Array.prototype.set,installed);
+    frame.Uint8Array.prototype.set=function(source,offset){compatible++;return native.call(this,source,offset);};
+    ready();const beforeFast=fast;target.set(new Uint8Array([3]),0);assert.equal(fast,beforeFast+1,'Reapply after deferred page scripts replace the method');
 });
 
 test('early module initialization handles fresh and malformed YouTube profiles', () => {
@@ -247,7 +415,7 @@ test('local playback pings use current-account authorization only on YouTube HTT
     const log = Logger.create(20);
     const messages = [];
     const window = { __legacyLog: log, postMessage(...args) { messages.push(args); } };
-    vm.runInNewContext(source, { window, parent: window, XMLHttpRequest: XHR, URL, Promise });
+    vm.runInNewContext(source, { window, parent: window, document:{readyState:'complete'}, XMLHttpRequest: XHR, URL, Promise });
     window.postMessage('test', null);
     window.postMessage('test', { targetOrigin: '*', transfer: ['synthetic'] });
     assert.equal(messages[0][1], null);

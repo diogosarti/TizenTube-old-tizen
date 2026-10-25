@@ -25,6 +25,7 @@ function setup(mode = 'auto', options = { extendedDiagnostics: true }) {
         } }, XMLHttpRequest: function () { throw new Error('Unexpected system fallback'); } };
     const log = Logger.create(100);
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/tls-transport.js'), 'utf8'), { window: win, Date: options.Date || Date, setTimeout(callback, ms) {
+        if (options.timerSchedules) options.timerSchedules.push(ms);
         const t = setTimeout(() => { timers.delete(t); callback(); }, ms); timers.add(t); return t;
     }, clearTimeout(t) { clearTimeout(t); timers.delete(t); } });
     const transport = win.LegacyTLS.create(container, log);
@@ -34,11 +35,26 @@ function setup(mode = 'auto', options = { extendedDiagnostics: true }) {
     return { win, transport, sent, log, message, close() { for (const t of timers) clearTimeout(t); } };
 }
 
-test('TLS startup defaults to TLS 1.2 and preserves all three explicit modes', () => {
-    for (const saved of [null, 'auto', '1.2', '1.3']) {
+test('Bulk cancellation schedules one pump and releases every media slot', () => {
+    const timerSchedules=[],env=setup('1.3',{timerSchedules});
+    try {
+        const requests=Array.from({length:40},()=>env.transport.request('GET','https://media.googlevideo.com/videoplayback',{},new ArrayBuffer(0),()=>{}));
+        assert.equal(env.transport.summary().active,4);assert.equal(env.transport.summary().queued,36);
+        const before=timerSchedules.length;
+        requests.forEach(r=>env.transport.abort(r));
+        assert.equal(timerSchedules.length-before,1);
+        assert.equal(env.transport.summary().active,0);assert.equal(env.transport.summary().queued,0);
+        for(let i=0;i<4;i++)env.transport.request('GET','https://media.googlevideo.com/videoplayback',{},new ArrayBuffer(0),()=>{});
+        for(let i=0;i<2;i++)env.transport.request('GET','https://www.youtube.com/api/stats/watchtime',{},new ArrayBuffer(0),()=>{});
+        assert.equal(env.transport.summary().active,6);assert.equal(env.transport.summary().queued,0);
+    }finally{env.close();}
+});
+
+test('TLS startup defaults to Auto and preserves all three explicit modes', () => {
+    for (const saved of [null, undefined, 'invalid', 'auto', '1.2', '1.3']) {
         const env = setup(saved);
         try {
-            const expected = saved === 'auto' || saved === '1.3' ? saved : '1.2';
+            const expected = saved === '1.2' || saved === '1.3' ? saved : 'auto';
             assert.equal(env.transport.summary().mode, expected);
             assert.equal(JSON.parse(env.win.localStorage.value).tlsMode, expected);
             const xhr = new env.win.XMLHttpRequest(); xhr.open('GET', 'https://www.youtube.com/tv'); xhr.send();
@@ -151,6 +167,7 @@ test('Extended diagnostics honor the saved setting and can be toggled without in
 test('XHR completion diagnostics separate assembly from slow event callbacks and preserve request identity on reentry', () => {
     let now = 1000;
     function MeasuredArray(value) { if (typeof value === 'number') now += 120; return new Uint8Array(value); }
+    MeasuredArray.prototype = Uint8Array.prototype;
     const env = setup('1.3', { Date: { now: () => now }, Uint8Array: MeasuredArray });
     try {
         const xhr = new env.win.XMLHttpRequest(); xhr.responseType = 'arraybuffer';
@@ -474,6 +491,7 @@ test('Binary XHR responses belong to the requesting frame, including single-chun
         const constructors = vm.runInNewContext('({ArrayBuffer, Uint8Array})');
         const frame = Object.assign({}, env.win, constructors);
         env.transport.install(frame);
+        constructors.Uint8Array.prototype.set=function(){throw Error('A later compatibility shim must not replace the captured native media copy');};
         for (const pieces of [[new Uint8Array([1, 2]).buffer], [new Uint8Array([1]).buffer, new Uint8Array([2]).buffer]]) {
             const xhr = new frame.XMLHttpRequest();
             xhr.open('GET', 'https://media.googlevideo.com/videoplayback'); xhr.responseType = 'arraybuffer'; xhr.send();

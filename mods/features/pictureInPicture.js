@@ -78,6 +78,7 @@ function enablePip() {
     observer.observe(ytlrPlayer, { attributes: true });
 
     // Exit from the current video player
+    window.isPipPlaying = true;
     resolveCommand({
         signalAction: {
             signal: "HISTORY_BACK"

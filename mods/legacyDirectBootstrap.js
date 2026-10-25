@@ -3,6 +3,27 @@ import 'whatwg-fetch';
 
 window.__legacyDirect = true;
 
+// The old WebKit needs core-js's generic set(), but its per-byte fallback is too
+// expensive for media buffers. Keep that fallback for non-byte-array inputs.
+let fastByteSet;
+function installFastByteCopy() {
+    if (!parent.__legacyTLS || Uint8Array.prototype.set === fastByteSet) return;
+    const nativeSet = parent.Uint8Array.prototype.set;
+    const compatibleSet = Uint8Array.prototype.set;
+    const nativeTag = parent.Object.prototype.toString;
+    fastByteSet = function (source, offset) {
+            if (nativeTag.call(this) === '[object Uint8Array]' && nativeTag.call(source) === '[object Uint8Array]' &&
+                (offset === undefined || (typeof offset === 'number' && isFinite(offset) && offset >= 0 && Math.floor(offset) === offset))) {
+                return nativeSet.call(this, source, offset === undefined ? 0 : offset);
+            }
+            return compatibleSet.apply(this, arguments);
+    };
+    // This WebKit marks the method non-configurable but keeps its value writable.
+    Object.defineProperty(Uint8Array.prototype, 'set', { value: fastByteSet });
+}
+installFastByteCopy();
+if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', installFastByteCopy, false);
+
 // Keep YouTube's current-account callback; do not cache credentials ourselves.
 let playerAuthorization;
 window.yt = window.yt || {};
@@ -16,7 +37,10 @@ window.yt.player.Application = window.yt.player.Application || {};
         set: function (value) {
             create = typeof value === 'function' ? function () {
                 playerAuthorization = arguments[3];
-                return value.apply(this, arguments);
+                installFastByteCopy();
+                const result = value.apply(this, arguments);
+                installFastByteCopy();
+                return result;
             } : value;
         }
     });

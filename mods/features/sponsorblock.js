@@ -62,17 +62,22 @@ class SponsorBlockHandler {
 
   attachVideoTimeout = null;
   nextSkipTimeout = null;
+  nextSkipSegment = null;
+  nextSkipRate = 0;
+  nextSkipAt = 0;
   sliderInterval = null;
   buildOverlayTimeout = null;
   positionOverlayHandler = null;
 
   observer = null;
   scheduleSkipHandler = null;
+  videoReplacementHandler = null;
   durationChangeHandler = null;
   segments = null;
   skippableCategories = [];
   manualSkippableCategories = [];
   skippedCategories = new Map();
+  pendingAutoSkip = null;
   manualButton = null;
   manualKeyHandler = null;
 
@@ -137,15 +142,23 @@ class SponsorBlockHandler {
       return;
     }
 
-    this.segments = result.segments;
+    this.segments = result.segments.slice().sort((a, b) => a.segment[0] - b.segment[0]);
     if (window.__legacyLog) window.__legacyLog.record('sponsor.loaded', 'segments=' + this.segments.length);
     this.manualSkippableCategories = configRead('sponsorBlockManualSkips');
     this.skippableCategories = this.getSkippableCategories();
 
-    this.scheduleSkipHandler = () => this.scheduleSkip();
+    this.scheduleSkipHandler = event => this.scheduleSkip(event);
     this.positionOverlayHandler = () => this.positionOverlay();
     window.addEventListener('resize', this.positionOverlayHandler);
     this.durationChangeHandler = () => this.buildOverlay();
+
+    this.videoReplacementHandler = event => {
+      if (this.active && this.matchesPlayback() && event.target !== this.video && event.target === document.querySelector('video')) {
+        this.attachVideo();
+        if (event.type === 'playing') this.scheduleSkip(event);
+      }
+    };
+    ['loadedmetadata', 'playing'].forEach(type => document.addEventListener(type, this.videoReplacementHandler, true));
 
     this.attachVideo();
     this.installManualSkip();
@@ -181,16 +194,40 @@ class SponsorBlockHandler {
     return skippableCategories;
   }
 
+  matchesPlayback() {
+    const route = new URL(location.hash.substring(1), document.baseURI);
+    const routeID = route.pathname === '/watch' ? route.searchParams.get('v') : null;
+    if (routeID !== this.videoID && !(window.isPipPlaying && !routeID)) return false;
+    const player = document.querySelector('.html5-video-player');
+    const playingID = player?.getVideoData?.()?.video_id;
+    return !playingID || playingID === this.videoID;
+  }
+
+  cancelSkip() {
+    clearTimeout(this.nextSkipTimeout);
+    this.nextSkipTimeout = null;
+    this.nextSkipSegment = null;
+  }
+
   attachVideo() {
     clearTimeout(this.attachVideoTimeout);
     this.attachVideoTimeout = null;
 
-    this.video = document.querySelector('video');
-    if (!this.video) {
+    const nextVideo = document.querySelector('video');
+    if (!nextVideo) {
       console.info(this.videoID, 'No video yet...');
       this.attachVideoTimeout = setTimeout(() => this.attachVideo(), 100);
       return;
     }
+    if (nextVideo === this.video) return;
+    if (this.video) {
+      ['play', 'pause', 'playing', 'waiting', 'seeking', 'seeked', 'ratechange', 'timeupdate'].forEach(type => {
+        this.video.removeEventListener(type, this.scheduleSkipHandler);
+      });
+      this.video.removeEventListener('durationchange', this.durationChangeHandler);
+      this.cancelSkip();
+    }
+    this.video = nextVideo;
 
     console.info(this.videoID, 'Video found, binding...');
 
@@ -297,18 +334,22 @@ class SponsorBlockHandler {
     }
   }
 
-  scheduleSkip() {
+  scheduleSkip(event) {
     this.updateManualSkip();
-    clearTimeout(this.nextSkipTimeout);
-    this.nextSkipTimeout = null;
 
     if (!this.active) {
-      console.info(this.videoID, 'No longer active, ignoring...');
+      this.cancelSkip();
       return;
+    }
+    const pending = this.pendingAutoSkip;
+    if (pending && event?.type === 'seeked' && pending.landing === null) pending.landing = this.video.currentTime;
+    if (pending && pending.landing !== null && !this.video.seeking &&
+        (this.video.currentTime >= pending.end || this.video.currentTime < pending.landing - 0.25)) {
+      this.pendingAutoSkip = null;
     }
 
     if (this.video.paused || this.video.seeking || this.video.readyState < 3 || this.video.playbackRate <= 0) {
-      console.info(this.videoID, 'Playback is not advancing, ignoring...');
+      this.cancelSkip();
       return;
     }
 
@@ -317,30 +358,32 @@ class SponsorBlockHandler {
     // and, in worst case, perform a skip at negative interval (immediately)...
     const nextSegments = this.segments.filter(
       (seg) =>
+        (!this.pendingAutoSkip || this.pendingAutoSkip.uuid !== seg.UUID) &&
         seg.segment[1] > this.video.currentTime &&
         this.skippableCategories.includes(seg.category) &&
         !this.manualSkippableCategories.includes(seg.category)
     );
-    nextSegments.sort((s1, s2) => s1.segment[0] - s2.segment[0]);
 
     if (!nextSegments.length) {
-      console.info(this.videoID, 'No more segments');
+      this.cancelSkip();
       return;
     }
 
     const [segment] = nextSegments;
     const [start, end] = segment.segment;
-    console.info(
-      this.videoID,
-      'Scheduling skip of',
-      segment,
-      'in',
-      start - this.video.currentTime
-    );
+    const delay = Math.max(0, (start - this.video.currentTime) * 1000 / this.video.playbackRate);
+    const due = Date.now() + delay;
+    // Keep the same timer while media and wall clocks advance together.
+    if (event?.type === 'timeupdate' && this.nextSkipTimeout !== null &&
+        this.nextSkipSegment === segment && this.nextSkipRate === this.video.playbackRate && Math.abs(this.nextSkipAt - due) <= 250) return;
+    this.cancelSkip();
+    this.nextSkipSegment = segment;
+    this.nextSkipRate = this.video.playbackRate;
+    this.nextSkipAt = due;
 
     this.nextSkipTimeout = setTimeout(() => {
       this.nextSkipTimeout = null;
-      if (!this.active || this.video.paused || this.video.seeking || this.video.readyState < 3 || this.video.playbackRate <= 0) {
+      if (!this.active || !this.matchesPlayback() || this.video.paused || this.video.seeking || this.video.readyState < 3 || this.video.playbackRate <= 0) {
         return;
       }
       // Buffering and delayed callbacks can separate wall time from media time.
@@ -390,12 +433,13 @@ class SponsorBlockHandler {
         }
         if (window.__legacyLog) window.__legacyLog.record('sponsor.skip-request', segment.category + '; target=' + end);
         const target = this.video.duration - end < 1 ? end - 1 : end;
+        this.pendingAutoSkip = { uuid: segment.UUID, end, landing: null };
         if (window.__legacyDirect) {
           document.querySelector('.html5-video-player').seekTo(target, true);
         } else this.video.currentTime = target;
         this.scheduleSkip();
       }
-    }, Math.max(0, (start - this.video.currentTime) * 1000 / this.video.playbackRate));
+    }, delay);
   }
 
   currentManualSegment() {
@@ -431,11 +475,19 @@ class SponsorBlockHandler {
   updateManualSkip() {
     if (!this.manualButton) return;
     const segment = this.currentManualSegment();
-    this.manualButton.style.display = segment ? 'block' : 'none';
-    if (segment) this.manualButton.textContent = t('sponsorblock.manualKey') + ': ' + t('sponsorblock.toasts.skip', { segment: t(`sponsorblock.segments.${segment.category}`) });
+    const display = segment ? 'block' : 'none';
+    if (this.manualButton.style.display !== display) this.manualButton.style.display = display;
+    if (segment) {
+      const text = t('sponsorblock.manualKey') + ': ' + t('sponsorblock.toasts.skip', { segment: t(`sponsorblock.segments.${segment.category}`) });
+      if (this.manualButton.textContent !== text) this.manualButton.textContent = text;
+    }
   }
 
   destroy() {
+    if (this.videoReplacementHandler) {
+      ['loadedmetadata', 'playing'].forEach(type => document.removeEventListener(type, this.videoReplacementHandler, true));
+      this.videoReplacementHandler = null;
+    }
     console.info(this.videoID, 'Destroying');
 
     this.active = false;
@@ -500,10 +552,11 @@ function handleVideoChange() {
     // srcdoc has an about: URL; the document base points to YouTube.
     const newURL = new URL(location.hash.substring(1), document.baseURI);
     // A hack, but it works, so...
-    const videoID = newURL.search.replace('?v=', '').split('&')[0];
+    const videoID = newURL.pathname === '/watch' ? newURL.searchParams.get('v') : null;
+    if (!videoID && window.isPipPlaying && window.sponsorblock?.matchesPlayback()) return;
     const needsReload =
-      videoID &&
-      (!window.sponsorblock || window.sponsorblock.videoID != videoID);
+      (!videoID && window.sponsorblock) ||
+      (videoID && (!window.sponsorblock || window.sponsorblock.videoID != videoID));
 
     console.info(
       'hashchange',
@@ -523,7 +576,7 @@ function handleVideoChange() {
         window.sponsorblock = null;
       }
 
-      if (configRead('enableSponsorBlock')) {
+      if (videoID && configRead('enableSponsorBlock')) {
         window.sponsorblock = new SponsorBlockHandler(videoID);
         window.sponsorblock.init().catch((err) => {
           console.warn('SponsorBlock initialization failed:', err);

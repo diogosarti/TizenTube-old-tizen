@@ -52,11 +52,13 @@ function execute_once_dom_loaded() {
   const ui = configRead('enableFixedUI');
   if (ui) {
     try {
-      window.tectonicConfig.featureSwitches.isLimitedMemory = false;
-      window.tectonicConfig.clientData.legacyApplicationQuality = 'full-animation';
-      window.tectonicConfig.featureSwitches.enableAnimations = true;
-      window.tectonicConfig.featureSwitches.enableOnScrollLinearAnimation = true;
-      window.tectonicConfig.featureSwitches.enableListAnimations = true;
+      if (!window.__legacyDirect) {
+        window.tectonicConfig.featureSwitches.isLimitedMemory = false;
+        window.tectonicConfig.clientData.legacyApplicationQuality = 'full-animation';
+        window.tectonicConfig.featureSwitches.enableAnimations = true;
+        window.tectonicConfig.featureSwitches.enableOnScrollLinearAnimation = true;
+        window.tectonicConfig.featureSwitches.enableListAnimations = true;
+      }
       window.tectonicConfig.featureSwitches.supportsLongPress = true;
     } catch (e) { }
   }

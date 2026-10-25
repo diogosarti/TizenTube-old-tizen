@@ -1,7 +1,7 @@
 (function (root) {
     'use strict';
     var CONFIG_KEY = 'ytaf-configuration';
-    function validMode(value) { return value === 'auto' || value === '1.3' ? value : '1.2'; }
+    function validMode(value) { return value === '1.2' || value === '1.3' ? value : 'auto'; }
     function resolve(win, value, base) {
         value = String(value);
         if (base && !/^[a-z][a-z0-9+.-]*:/i.test(value)) {
@@ -27,10 +27,10 @@
         for (var i = 0; i < text.length; i++) array[i] = text.charCodeAt(i);
         callback(array.buffer);
     }
-    function combine(chunks, length, Buffer, ByteArray) {
+    function combine(chunks, length, Buffer, ByteArray, setBytes) {
         if (chunks.length === 1 && chunks[0] instanceof Buffer) return chunks[0];
         var all = new ByteArray(length), at = 0;
-        for (var i = 0; i < chunks.length; i++) { all.set(new root.Uint8Array(chunks[i]), at); at += chunks[i].byteLength; }
+        for (var i = 0; i < chunks.length; i++) { setBytes.call(all, new ByteArray(chunks[i]), at); at += chunks[i].byteLength; }
         return all.buffer;
     }
     function text(buffer, decoder, final) {
@@ -77,7 +77,8 @@
         return result;
     }
     function create(container, log, changed) {
-        var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = '1.2';
+        var module, ready = false, failed = false, sequence = 0, active = 0, requests = {}, queue = [], mode = 'auto';
+        var mediaActive = 0, otherActive = 0, backgroundActive = 0, pumpTimer = null;
         var stats = { api: {}, video: {}, errors: 0, completed: 0, bytes: 0 }, extendedDiagnostics = false, collectProblemCDNs = false;
         var last = { api: 'unknown', video: 'unknown' }, diagnostics = [], logDiagnosticReply = false, mediaKey = '', media = { video: 'unknown', audio: 'unknown' }, ciphers = { api: 'unknown', video: 'unknown', audio: 'unknown' }, lastNotice = '';
         try {
@@ -132,17 +133,16 @@
         function pump() {
             if (!ready || failed) return;
             while (active < 6 && queue.length) {
-                var busy = Object.keys(requests).map(function (id) { return requests[id]; }).filter(function (r) { return r.active; });
-                var other = busy.filter(function (r) { return r.group !== 'video'; }).length;
-                var mediaActive = active - other;
-                var background = busy.filter(function (r) { return r.background; }).length;
                 var index = -1;
                 for (var i = 0; mediaActive < 4 && i < queue.length; i++) if (queue[i].group === 'video') { index = i; break; }
-                if (index < 0 && other < 4) for (i = 0; i < queue.length; i++) if (queue[i].group !== 'video' && !queue[i].background) { index = i; break; }
-                if (index < 0 && other < 4 && background < 1) for (i = 0; i < queue.length; i++) if (queue[i].group !== 'video' && queue[i].background) { index = i; break; }
+                if (index < 0 && otherActive < 4) for (i = 0; i < queue.length; i++) if (queue[i].group !== 'video' && !queue[i].background) { index = i; break; }
+                if (index < 0 && otherActive < 4 && backgroundActive < 1) for (i = 0; i < queue.length; i++) if (queue[i].group !== 'video' && queue[i].background) { index = i; break; }
                 if (index < 0) break;
                 var r = queue.splice(index, 1)[0]; if (!requests[r.id]) continue;
                 active++; r.active = true; r.startedAt = Date.now(); r.tlsReady = false;
+                r.slotGroup = r.group;
+                if (r.slotGroup === 'video') mediaActive++; else otherActive++;
+                if (r.background) backgroundActive++;
                 var u = r.parsed, lines = '', h = r.headers;
                 log.record('tls.queue', r.group + '; waitMs=' + (Date.now() - r.queuedAt));
                 r.received = 0; r.status = 0; r.lastProgress = Date.now();
@@ -156,10 +156,20 @@
             }
             notify();
         }
+        function schedulePump() {
+            if (pumpTimer !== null) return;
+            pumpTimer = setTimeout(function () { pumpTimer = null; pump(); }, 0);
+        }
+        function releaseSlot(r) {
+            if (!r.active) return;
+            active--; r.active = false;
+            if (r.slotGroup === 'video') mediaActive--; else otherActive--;
+            if (r.background) backgroundActive--;
+        }
         function remove(r) {
-            delete requests[r.id]; if (r.active) active--; r.active = false;
+            delete requests[r.id]; releaseSlot(r);
             queue = queue.filter(function (item) { return item !== r; });
-            setTimeout(pump, 0);
+            schedulePump();
         }
         function cdnFailure(r, reason) {
             if (!collectProblemCDNs || r.group !== 'video' || r.parsed.pathname !== '/videoplayback' || !r.active || !r.startedAt ||
@@ -179,8 +189,8 @@
             remove(r); r.callback = null;
         }
         function requeue(r) {
-            delete requests[r.id]; active--; r.active = false;
-            r.id = ++sequence; r.queuedAt = Date.now(); r.mediaRecorded = false; requests[r.id] = r; queue.push(r); setTimeout(pump, 0);
+            delete requests[r.id]; releaseSlot(r);
+            r.id = ++sequence; r.queuedAt = Date.now(); r.mediaRecorded = false; requests[r.id] = r; queue.push(r); schedulePump();
             trace(r, 'net.queued', 'attempt=requeued');
         }
         function request(method, url, h, body, callback, guard) {
@@ -334,7 +344,8 @@
         return api;
     }
     function install(win, transport) {
-        var NativeXHR = win.XMLHttpRequest, NativeBuffer = win.ArrayBuffer, NativeBytes = win.Uint8Array, live = [];
+        var NativeXHR = win.XMLHttpRequest, NativeBuffer = win.ArrayBuffer, NativeBytes = win.Uint8Array;
+        var nativeSetBytes = NativeBytes.prototype.set, live = [];
         var interactionAt = -Infinity, leaving = false;
         function interacted() { interactionAt = Date.now(); }
         function unloading() { leaving = true; }
@@ -470,7 +481,7 @@
                             if (!self._sent || self._generation !== generation) return;
                             var assembleStart = measured ? Date.now() : 0;
                             // Match native XHR: the response belongs to the requesting window.
-                            if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length, NativeBuffer, NativeBytes);
+                            if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length, NativeBuffer, NativeBytes, nativeSetBytes);
                             else decoded(self, true);
                             if (measured) assembleMs = Date.now() - assembleStart;
                             self._chunks = []; untrack(self);
