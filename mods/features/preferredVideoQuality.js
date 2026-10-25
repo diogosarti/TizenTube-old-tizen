@@ -1,8 +1,5 @@
 import { configRead, configChangeEmitter } from "../config.js";
-
-const SELECTORS = {
-    PLAYER: '.html5-video-player',
-};
+import { watchPlayer } from '../utils/playerLifecycle.js';
 
 const EVENTS = {
     YT_STATE_CHANGE: 'onStateChange',
@@ -15,7 +12,7 @@ const CONFIG_KEYS = {
 
 class PreferredQualityHandler {
     #player = null;
-    #attachTimeout = null;
+    #video = null;
     #lastVideoId = null;
     #hasAppliedQuality = false;
     #qualityLocked = false;
@@ -25,22 +22,19 @@ class PreferredQualityHandler {
     }
 
     init() {
-        this.#pollForPlayer();
+        watchPlayer((player, video) => this.#attachPlayer(player, video));
         this.#setupConfigListener();
     }
 
-    #pollForPlayer() {
-        clearTimeout(this.#attachTimeout);
-
-        const playerElement = document.querySelector(SELECTORS.PLAYER);
-
-        if (!playerElement) {
-            this.#attachTimeout = setTimeout(() => this.#pollForPlayer(), 100);
-            return;
-        }
-
+    #attachPlayer(playerElement, videoElement) {
+        if (playerElement === this.#player && videoElement === this.#video) return;
+        this.#player?.removeEventListener(EVENTS.YT_STATE_CHANGE, this.#handleStateChange);
         this.#player = playerElement;
-
+        this.#video = videoElement;
+        this.#lastVideoId = null;
+        this.#hasAppliedQuality = false;
+        this.#qualityLocked = false;
+        if (!this.#player) return;
         this.#player.addEventListener(EVENTS.YT_STATE_CHANGE, this.#handleStateChange);
 
         this.#handleStateChange();
@@ -64,7 +58,7 @@ class PreferredQualityHandler {
             this.#hasAppliedQuality = false;
         }
 
-        const isShorts = Object.values(this.#player.getVideoStats()).find(a => a && a === 'shortspage');
+        const isShorts = Object.values(this.#player?.getVideoStats?.() || {}).includes('shortspage');
         if (state?.isPlaying && !this.#hasAppliedQuality && !isShorts) {
             this.#hasAppliedQuality = this.#applyQuality();
         }

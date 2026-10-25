@@ -50,6 +50,45 @@ test('Bulk cancellation schedules one pump and releases every media slot', () =>
     }finally{env.close();}
 });
 
+test('Completed XHR abort clears binary and JSON data without firing abort events', () => {
+    for(const type of ['arraybuffer','json']) {
+        const env=setup();try {
+            const xhr=new env.win.XMLHttpRequest();xhr.open('GET','https://example.test/data');xhr.responseType=type;xhr.send();const r=env.sent[0];
+            env.message({type:'headers',id:r.id,status:200,headers:'Content-Type: application/json\r\n'});
+            env.message({type:'data',id:r.id,body:new TextEncoder().encode('{"ok":true}').buffer});env.message({type:'done',id:r.id});
+            assert.ok(xhr.response);let events=0;xhr.onabort=xhr.onloadend=()=>events++;xhr.abort();
+            assert.equal(xhr.readyState,0);assert.equal(xhr.status,0);assert.equal(xhr.statusText,'');assert.equal(xhr.responseURL,'');assert.equal(xhr.response,null);
+            assert.equal(xhr._body,null);assert.equal(xhr._text,'');assert.equal(xhr._json,null);assert.equal(xhr._chunks.length,0);assert.equal(events,0);
+        }finally{env.close();}
+    }
+});
+
+test('Known-length binary responses fill one buffer and handle missing, encoded and mismatched lengths', () => {
+    for(const headers of ['Content-Length: 4\r\n','Content-Length: 2\r\n','Content-Length: 8\r\n',
+        'Content-Length: 2\r\nContent-Encoding: gzip\r\n','Content-Length: 2\r\nTransfer-Encoding: chunked\r\n','']) {
+        const env=setup();try {
+            const xhr=new env.win.XMLHttpRequest();xhr.open('GET','https://example.test/data');xhr.responseType='arraybuffer';xhr.send();const r=env.sent[0];
+            env.message({type:'headers',id:r.id,status:200,headers});env.message({type:'data',id:r.id,body:Uint8Array.from([1,2]).buffer});
+            const allocated=xhr._body;assert.equal(xhr.response,null);env.message({type:'data',id:r.id,body:Uint8Array.from([3,4]).buffer});assert.equal(xhr.response,null);
+            env.message({type:'done',id:r.id});assert.deepEqual(Array.from(new Uint8Array(xhr.response)),[1,2,3,4]);
+            assert.match(env.log.read().find(entry=>entry.code==='net.xhr-done').detail,/chunks=2;/);
+            if(headers==='Content-Length: 4\r\n'){assert.equal(xhr.response,allocated);assert.equal(xhr._chunks.length,0);}
+            assert.equal(env.win.__legacyXHRMemory().pendingBytes,0);
+        }finally{env.close();}
+    }
+});
+
+test('Relative redirects retain the resource path for query and fragment references', async () => {
+    for(const [location,expected] of [['?token=new','/dir/videoplayback?token=new'],['#part','/dir/videoplayback?token=old'],['../next','/next']]) {
+        const env=setup();try {
+            const r=env.transport.request('GET','https://example.test/dir/videoplayback?token=old',{},new ArrayBuffer(0),()=>{});
+            env.message({type:'headers',id:r.id,status:302,headers:'Location: '+location+'\r\n'});
+            await new Promise(resolve=>setTimeout(resolve,10));const requests=env.sent.filter(r=>r.type==='request');
+            assert.equal(requests.at(-1).path,expected);
+        }finally{env.close();}
+    }
+});
+
 test('TLS startup defaults to Auto and preserves all three explicit modes', () => {
     for (const saved of [null, undefined, 'invalid', 'auto', '1.2', '1.3']) {
         const env = setup(saved);

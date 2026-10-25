@@ -51,9 +51,17 @@ export function getCountryLanguage(countryCode) {
             return { code, name };
         }
 
-        const base = new Intl.Locale("und", { region });
-        const maximized = base.maximize ? base.maximize() : base;
-        const lang = maximized.language || "en";
+        const fallback = { RU:'ru', BY:'be', UA:'uk', KZ:'kk', US:'en', GB:'en', AU:'en', CA:'en', NZ:'en',
+            DE:'de', AT:'de', FR:'fr', IT:'it', ES:'es', MX:'es', AR:'es', BR:'pt', PT:'pt', PL:'pl', CZ:'cs',
+            SK:'sk', FI:'fi', SE:'sv', NO:'no', DK:'da', NL:'nl', GR:'el', TR:'tr', IL:'he', JP:'ja', KR:'ko',
+            IN:'hi', ID:'id', TH:'th', VN:'vi', RO:'ro', HU:'hu', BG:'bg', RS:'sr' };
+        let lang = fallback[region];
+        if (typeof Intl !== 'undefined' && typeof Intl.Locale === 'function') {
+            const base = new Intl.Locale("und", { region });
+            const maximized = base.maximize ? base.maximize() : base;
+            lang = maximized.language || lang;
+        }
+        if (!lang) return null;
 
         const name = languages.language.standard.long[lang] || lang;
 
@@ -62,6 +70,14 @@ export function getCountryLanguage(countryCode) {
         console.warn("TizenTube Subtitle Localization: Could not infer language for country", countryCode, e);
         return null;
     }
+}
+
+function getUserLanguage() {
+    const selected = window.yt?.config_?.HL || navigator.language || '';
+    const tag = selected.replace('_', '-').toLowerCase();
+    const code = LANGUAGE_CODES.find(code => code.toLowerCase() === tag) || LANGUAGE_CODES.find(code => code === tag.split('-')[0]);
+    if (code) return { code, name: getComprehensiveLanguageList()[code] };
+    return getCountryLanguage(getUserCountryCode());
 }
 
 let isPatched = false;
@@ -246,8 +262,7 @@ function patchSubtitleMenu() {
 
             // Add user's local language if enabled
             if (showUserLanguage) {
-                const userCountryCode = getUserCountryCode();
-                const userLanguage = getCountryLanguage(userCountryCode);
+                const userLanguage = getUserLanguage();
 
                 if (userLanguage) {
                     // Check if the user's language already exists

@@ -151,7 +151,9 @@
         setInterval(function () {
             var now = Date.now(), elapsed = now - lastTick; lastTick = now;
             if (extendedDiagnostics() && video && !video.paused && elapsed > 1000) log.record('video.loop-delay', 'intervalMs=' + elapsed + '; lateMs=' + (elapsed - 500));
+            var started = extendedDiagnostics() ? Date.now() : 0;
             updateStatus();
+            if (started && Date.now() - started >= 50) log.record('ui.status-work', 'elapsedMs=' + (Date.now() - started));
             sampleStall();
         }, 500);
         setInterval(function () { if (video) sampleVideo(); }, 10000);

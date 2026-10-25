@@ -14,7 +14,26 @@ const outputPlugins = [
     }),
     terser({ ecma: 5, format: { comments: false } }),
 ];
-const plugins = base.plugins.filter(p => p.name !== 'babel' && p.name !== 'terser');
+// Keep core-js constructor semantics, but copy byte views with the widget's
+// native set() instead of assigning every byte in JavaScript.
+export function legacyByteArrayCopy() {
+    return {
+        name: 'legacy-byte-array-copy',
+        transform(code, id) {
+            if (!id.replace(/\\/g, '/').endsWith('/core-js/internals/array-from-constructor-and-list.js')) return null;
+            const loop = '  while (length > index) result[index] = list[index++];';
+            if (!code.includes(loop)) throw new Error('Unsupported core-js byte-copy helper');
+            return { code: code.replace(loop, `  if (typeof parent !== 'undefined' && parent.__legacyTLS && length === list.length &&
+      parent.Object.prototype.toString.call(result) === '[object Uint8Array]' &&
+      parent.Object.prototype.toString.call(list) === '[object Uint8Array]') {
+    parent.Uint8Array.prototype.set.call(result, list);
+    return result;
+  }
+` + loop), map: null };
+        },
+    };
+}
+const plugins = [legacyByteArrayCopy(), ...base.plugins.filter(p => p.name !== 'babel' && p.name !== 'terser')];
 
 export default [
     { ...base, plugins, output: { file: '../legacy/dist/userScript.js', format: 'iife', plugins: outputPlugins } },

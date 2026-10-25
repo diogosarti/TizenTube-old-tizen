@@ -1,4 +1,5 @@
 {
+  "settingsStorageError": "Settings changed for this session but could not be saved to TV storage.",
   "cdnJournal": {
     "title": "Problematic CDNs",
     "counter": "Problematic GGC: {{count}}",

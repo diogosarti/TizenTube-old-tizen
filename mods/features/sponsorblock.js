@@ -1,5 +1,5 @@
 import sha256 from '../tiny-sha256.js';
-import { configRead } from '../config.js';
+import { configRead, configChangeEmitter } from '../config.js';
 import { showToast } from '../ui/ytUI.js';
 import { t } from 'i18next';
 
@@ -125,6 +125,14 @@ class SponsorBlockHandler {
     const url = `${sponsorblockAPI}/skipSegments/${videoHash}?categories=${encodeURIComponent(JSON.stringify(categories))}`;
     try {
       results = await this.requestSegments(url);
+      if (!this.active) return;
+      if (!Array.isArray(results) || !results.every(item => item && typeof item.videoID === 'string' && item.videoID.length && Array.isArray(item.segments) &&
+          item.segments.every(segment => segment && typeof segment.UUID === 'string' && segment.UUID.length && typeof segment.category === 'string' && segment.category.length &&
+            Array.isArray(segment.segment) && segment.segment.length === 2 && segment.segment.every(Number.isFinite) &&
+            segment.segment[0] >= 0 && (segment.segment[1] > segment.segment[0] ||
+              (segment.category === 'poi_highlight' && segment.segment[1] === segment.segment[0]))))) {
+        throw new Error('Invalid SponsorBlock response');
+      }
       this.availability = 'available';
     } catch (err) {
       this.availability = 'unavailable';
@@ -383,7 +391,7 @@ class SponsorBlockHandler {
 
     this.nextSkipTimeout = setTimeout(() => {
       this.nextSkipTimeout = null;
-      if (!this.active || !this.matchesPlayback() || this.video.paused || this.video.seeking || this.video.readyState < 3 || this.video.playbackRate <= 0) {
+      if (!this.active || !configRead('enableSponsorBlock') || !this.matchesPlayback() || this.video.paused || this.video.seeking || this.video.readyState < 3 || this.video.playbackRate <= 0) {
         return;
       }
       // Buffering and delayed callbacks can separate wall time from media time.
@@ -443,7 +451,7 @@ class SponsorBlockHandler {
   }
 
   currentManualSegment() {
-    if (!this.active || !this.video || this.video.seeking) return null;
+    if (!this.active || !configRead('enableSponsorBlock') || !this.video || this.video.seeking) return null;
     return (this.segments || []).find(seg => this.skippableCategories.includes(seg.category) &&
       this.manualSkippableCategories.includes(seg.category) &&
       seg.segment[0] <= this.video.currentTime && seg.segment[1] > this.video.currentTime);
@@ -547,16 +555,21 @@ class SponsorBlockHandler {
 // This either reveals some bug in chromium/webpack/babel scope handling, or
 // shows my lack of understanding of javascript. (or both)
 window.sponsorblock = null;
+let lastWatchID = null;
 
 function handleVideoChange() {
     // srcdoc has an about: URL; the document base points to YouTube.
     const newURL = new URL(location.hash.substring(1), document.baseURI);
     // A hack, but it works, so...
-    const videoID = newURL.pathname === '/watch' ? newURL.searchParams.get('v') : null;
-    if (!videoID && window.isPipPlaying && window.sponsorblock?.matchesPlayback()) return;
+    const routeID = newURL.pathname === '/watch' ? newURL.searchParams.get('v') : null;
+    if (routeID) lastWatchID = routeID;
+    else if (!window.isPipPlaying) lastWatchID = null;
+    const pipID = window.isPipPlaying && document.querySelector('.html5-video-player')?.getVideoData?.()?.video_id;
+    const videoID = routeID || (pipID === lastWatchID ? lastWatchID : null);
+    const enabled = configRead('enableSponsorBlock');
     const needsReload =
-      (!videoID && window.sponsorblock) ||
-      (videoID && (!window.sponsorblock || window.sponsorblock.videoID != videoID));
+      ((!videoID || !enabled) && window.sponsorblock) ||
+      (videoID && enabled && (!window.sponsorblock || window.sponsorblock.videoID != videoID));
 
     console.info(
       'hashchange',
@@ -588,4 +601,18 @@ function handleVideoChange() {
     }
 }
 window.addEventListener('hashchange', handleVideoChange, false);
+configChangeEmitter.addEventListener('configChange', event => {
+    const key = event.detail.key;
+    if (key === 'enableSponsorBlock') { handleVideoChange(); return; }
+    const handler = window.sponsorblock;
+    if (!handler?.active || !handler.segments || !(key.startsWith('enableSponsorBlock') || key === 'sponsorBlockManualSkips')) return;
+    handler.skippableCategories = handler.getSkippableCategories();
+    handler.manualSkippableCategories = configRead('sponsorBlockManualSkips');
+    const pending = handler.pendingAutoSkip;
+    if (pending) {
+      const segment = handler.segments.find(segment => segment.UUID === pending.uuid);
+      if (!segment || !handler.skippableCategories.includes(segment.category) || handler.manualSkippableCategories.includes(segment.category)) handler.pendingAutoSkip = null;
+    }
+    if (handler.video) handler.scheduleSkip();
+});
 handleVideoChange();

@@ -1,4 +1,5 @@
 {
+  "settingsStorageError": "Настройки применены для этого сеанса, но не сохранены в памяти ТВ.",
   "cdnJournal": {
     "title": "Проблемные CDN",
     "counter": "Проблемные GGC: {{count}}",

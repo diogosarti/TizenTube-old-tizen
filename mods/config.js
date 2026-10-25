@@ -76,23 +76,46 @@ const defaultConfig = {
   hideRelatedVideosPlayer: false,
 };
 
-let localConfig;
-
+const localConfig = Object.create(null);
+let savedConfig = {}, storageFailed = false, repairTLS = false;
 try {
-  localConfig = JSON.parse(window.localStorage[CONFIG_KEY]);
-} catch (err) {
-  console.warn('Config read failed:', err);
-  localConfig = defaultConfig;
+  const parsed = JSON.parse(window.localStorage[CONFIG_KEY]);
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) savedConfig = parsed;
+} catch (_) { console.warn('Config read failed'); }
+Object.keys(savedConfig).forEach(key => { localConfig[key] = savedConfig[key]; });
+Object.keys(defaultConfig).forEach(key => {
+  const fallback = defaultConfig[key], value = localConfig[key];
+  const valid = Array.isArray(fallback) ? Array.isArray(value) :
+    typeof value === typeof fallback && (typeof fallback !== 'number' || Number.isFinite(value));
+  if (!valid) localConfig[key] = Array.isArray(fallback) ? fallback.slice() : fallback;
+  else if (Array.isArray(fallback)) localConfig[key] = value.filter(item => typeof item === 'string' ||
+    (key === 'sidebarContentsOrder' && item && typeof item.browseId === 'string' && typeof item.title === 'string'));
+});
+if (!(localConfig.videoSpeed > 0 && localConfig.videoSpeed <= 5)) localConfig.videoSpeed = defaultConfig.videoSpeed;
+if (!(localConfig.speedSettingsIncrement > 0 && localConfig.speedSettingsIncrement <= 5)) localConfig.speedSettingsIncrement = defaultConfig.speedSettingsIncrement;
+if (!['auto', '1.2', '1.3'].includes(localConfig.tlsMode)) localConfig.tlsMode = defaultConfig.tlsMode;
+repairTLS = savedConfig.tlsMode !== localConfig.tlsMode;
+
+function saveConfig() {
+  try {
+    window.localStorage[CONFIG_KEY] = JSON.stringify(localConfig);
+    storageFailed = false;
+    return true;
+  } catch (_) {
+    console.warn('Settings could not be saved');
+    if (!storageFailed) {
+      storageFailed = true;
+      setTimeout(() => configChangeEmitter.dispatchEvent(new CustomEvent('configStorageError')), 0);
+    }
+    return false;
+  }
 }
 
 export function configRead(key) {
-  if (key === 'tlsMode' && !['auto', '1.2', '1.3'].includes(localConfig[key])) {
-    localConfig[key] = 'auto';
-    window.localStorage[CONFIG_KEY] = JSON.stringify(localConfig);
-  }
+  if (key === 'tlsMode' && repairTLS) { repairTLS = false; saveConfig(); }
   if (localConfig[key] === undefined) {
     console.warn('Populating key', key, 'with default value', defaultConfig[key]);
-    localConfig[key] = defaultConfig[key];
+    localConfig[key] = Array.isArray(defaultConfig[key]) ? defaultConfig[key].slice() : defaultConfig[key];
   }
 
   return localConfig[key];
@@ -101,7 +124,7 @@ export function configRead(key) {
 export function configWrite(key, value) {
   console.info('Setting key', key, 'to', value);
   localConfig[key] = value;
-  window.localStorage[CONFIG_KEY] = JSON.stringify(localConfig);
+  saveConfig();
   if (key === 'tlsMode' && window.__legacyDirect && parent.__legacyTLS) parent.__legacyTLS.setMode(value);
   if (key === 'extendedDiagnostics' && window.__legacyDirect && parent.__legacyTLS) parent.__legacyTLS.setDiagnostics(value);
   if (key === 'collectProblemCDNs' && window.__legacyDirect && parent.__legacyTLS) parent.__legacyTLS.setCDNCollection(value);

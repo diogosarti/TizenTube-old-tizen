@@ -5,6 +5,7 @@ import { longPressData, MenuServiceItemRenderer, ShelfRenderer, TileRenderer, Bu
 import { findFeedbackToken } from '../utils/innerTubeCalls.js';
 import { PatchSettings } from '../ui/customYTSettings.js';
 import { t } from 'i18next';
+import { getQueuedVideoId } from '../utils/videoCards.js';
 
 /**
  * This is a minimal reimplementation of the following uBlock Origin rule:
@@ -191,9 +192,7 @@ JSON.parse = function () {
         r.contents.singleColumnWatchNextResults.pivot.sectionListRenderer.contents.unshift(ShelfRenderer(
           'Queued Videos',
           queuedVideosClone,
-          queuedVideosClone.findIndex(v => v.contentId === window.queuedVideos.lastVideoId) !== -1 ?
-            queuedVideosClone.findIndex(v => v.contentId === window.queuedVideos.lastVideoId)
-            : 0
+          Math.max(0, queuedVideosClone.findIndex(v => getQueuedVideoId(v) === window.queuedVideos.lastVideoId))
         ));
       }
     }
@@ -297,13 +296,22 @@ JSON.parse = function () {
 // Fix playback issues
 
 const origStringify = JSON.stringify;
+function copyableRecord(value) {
+  if (!value || typeof value !== 'object' || 'toJSON' in value || Object.prototype.hasOwnProperty.call(value, '__proto__')) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return (prototype === null || Object.getPrototypeOf(prototype) === null) &&
+    Object.keys(value).every(key => Object.prototype.hasOwnProperty.call(Object.getOwnPropertyDescriptor(value, key), 'value'));
+}
 JSON.stringify = function (value, replacer, space) {
-  if (value?.playbackContext?.contentPlaybackContext) {
-    const copiedValue = JSON.parse(origStringify(value));
-    if (!copiedValue.playbackContext.contentPlaybackContext.isInlinePlaybackNoAd) {
-      copiedValue.playbackContext.contentPlaybackContext.isInlinePlaybackNoAd = true;
-      return origStringify.call(this, copiedValue, replacer, space);
-    }
+  const playbackProperty = value && typeof value === 'object' && Object.getOwnPropertyDescriptor(value, 'playbackContext');
+  const playback = playbackProperty && playbackProperty.value;
+  const contextProperty = playback && typeof playback === 'object' && Object.getOwnPropertyDescriptor(playback, 'contentPlaybackContext');
+  const context = contextProperty && contextProperty.value;
+  const flag = context && typeof context === 'object' && Object.getOwnPropertyDescriptor(context, 'isInlinePlaybackNoAd');
+  if ((!flag || ('value' in flag && !flag.value)) && context && copyableRecord(value) && copyableRecord(playback) && copyableRecord(context)) {
+    const copiedContext = Object.assign({}, context, { isInlinePlaybackNoAd: true });
+    const copiedPlayback = Object.assign({}, playback, { contentPlaybackContext: copiedContext });
+    return origStringify.call(this, Object.assign({}, value, { playbackContext: copiedPlayback }), replacer, space);
   }
   return origStringify.call(this, value, replacer, space);
 };

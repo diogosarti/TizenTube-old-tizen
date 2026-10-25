@@ -17,6 +17,7 @@ function snapshot() {
         var frame = document.querySelector('iframe'), w = frame && frame.contentWindow;
         var d = w && w.document, v = d && d.querySelector('video'), p = d && d.querySelector('.html5-video-player');
         out.frame = w && w.performance.timing.navigationStart;
+        if (w && w.__legacyXHRMemory) out.memory = w.__legacyXHRMemory();
         if (v) {
             var ranges = [];
             for (var i = 0; i < v.buffered.length; i++) ranges.push([v.buffered.start(i), v.buffered.end(i)]);
@@ -58,6 +59,12 @@ function sanitize(s) {
             .filter(r => Array.isArray(r) && r.length === 2 && r.every(Number.isFinite));
     }
     out.stats = {};
+    if (s.memory) {
+        out.memory = {};
+        ['pendingBytes', 'pendingRequests', 'assemblyPeakBytes'].forEach(k => {
+            if (Number.isFinite(s.memory[k]) && s.memory[k] >= 0) out.memory[k] = s.memory[k];
+        });
+    }
     for (const k of ['fmt', 'afmt', 'lvb', 'lab', 'lvr', 'lva', 'lar', 'laa', 'lvq', 'laq', 'vbu', 'vbs', 'vpl', 'vsk', 'reqBlocked']) {
         const value = s.stats && s.stats[k];
         if (typeof value === 'number' && Number.isFinite(value)) out.stats[k] = value;
@@ -123,14 +130,48 @@ function pages(host, port) {
     });
 }
 
+// Keep only call-tree metadata, never script source, URL queries or page values.
+function cleanProfile(profile) {
+    const nodes = [];
+    function visit(node) {
+        if (!node || typeof node !== 'object' || nodes.length >= 40000) return null;
+        const frame = node.callFrame || node;
+        const row = { id: Number.isFinite(node.id) ? node.id : nodes.length + 1,
+            name: String(frame.functionName || '(anonymous)').replace(/[^a-zA-Z0-9_.$() <>/-]/g, '').slice(0, 160),
+            source: '', children: [] };
+        // File URLs are allowed only for known widget script names, never local paths.
+        if (/^(https?:\/\/|file:)/i.test(frame.url || '')) {
+            try {
+                const url = new URL(frame.url), name = url.pathname.split('/').pop();
+                if (url.protocol !== 'file:' || /^(compat|userScript|tls-transport|frame|widget|logger)\.js$|^player\.html$/.test(name))
+                    row.source = name.replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 160);
+            } catch { /* No source label. */ }
+        }
+        for (const key of ['lineNumber', 'columnNumber']) if (Number.isFinite(frame[key])) row[key] = frame[key];
+        for (const key of ['hitCount', 'numberOfCalls', 'selfTime', 'totalTime']) if (Number.isFinite(node[key])) row[key] = node[key];
+        nodes.push(row);
+        for (const child of (Array.isArray(node.children) ? node.children : [])) {
+            const id = typeof child === 'object' ? visit(child) : child;
+            if (Number.isFinite(id)) row.children.push(id);
+        }
+        return row.id;
+    }
+    if (profile.head) visit(profile.head);
+    else for (const node of profile.nodes || []) visit(node);
+    const out = { nodes };
+    for (const key of ['startTime', 'endTime']) if (Number.isFinite(profile[key])) out[key] = profile[key];
+    for (const key of ['samples', 'timeDeltas', 'timestamps']) if (Array.isArray(profile[key])) out[key] = profile[key].filter(Number.isFinite);
+    return out;
+}
+
 async function record(host, dir) {
     const writer = new Writer(dir);
-    let stopped = false, socket, epoch = 0, cursor = 0, previous, lastNotice = '', lastJournal;
+    let stopped = false, socket, stopProfiler, epoch = 0, cursor = 0, previous, lastNotice = '', lastJournal;
     const notice = state => {
         if (state !== lastNotice) { writer.write({ type: 'recorder', state }); console.log(new Date().toLocaleTimeString(), state); lastNotice = state; }
     };
-    process.on('SIGINT', () => { stopped = true; if (socket) socket.terminate(); });
-    process.on('SIGTERM', () => { stopped = true; if (socket) socket.terminate(); });
+    process.on('SIGINT', () => { stopped = true; });
+    process.on('SIGTERM', () => { stopped = true; });
     console.log('Diagnostics folder:', dir, '\nKeep this window open. Ctrl+C stops recording.');
     while (!stopped) {
         try {
@@ -143,7 +184,7 @@ async function record(host, dir) {
             socket.on('error', () => {}); // The connection/request promises report failures.
             await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
             let id = 0;
-            const evaluate = () => new Promise((resolve, reject) => {
+            const call = (method, params = {}, timeout = 8000) => new Promise((resolve, reject) => {
                 const requestId = ++id;
                 const finish = (error, value) => { clearTimeout(timer); socket.removeListener('message', message); socket.removeListener('close', closed); error ? reject(error) : resolve(value); };
                 const closed = () => finish(new Error('disconnected'));
@@ -151,17 +192,68 @@ async function record(host, dir) {
                     try {
                         const reply = JSON.parse(raw);
                         if (reply.id !== requestId) return;
-                        const result = reply.result;
-                        if (!result || result.wasThrown || !result.result || typeof result.result.value !== 'string') return finish(new Error('evaluation'));
-                        finish(null, sanitize(JSON.parse(result.result.value)));
+                        if (reply.error) return finish(new Error('protocol-command'));
+                        finish(null, reply.result || {});
                     } catch { finish(new Error('protocol')); }
                 };
-                const timer = setTimeout(() => finish(new Error('timeout')), 8000);
+                const timer = setTimeout(() => finish(new Error('timeout')), timeout);
                 socket.on('message', message); socket.once('close', closed);
-                socket.send(JSON.stringify({ id: requestId, method: 'Runtime.evaluate', params: { expression: 'JSON.stringify((' + snapshot.toString() + ')())', returnByValue: true } }));
+                socket.send(JSON.stringify({ id: requestId, method, params }));
             });
+            const evaluate = async () => {
+                const result = await call('Runtime.evaluate', { expression: 'JSON.stringify((' + snapshot.toString() + ')())', returnByValue: true });
+                if (result.wasThrown || !result.result || typeof result.result.value !== 'string') throw new Error('evaluation');
+                return sanitize(JSON.parse(result.result.value));
+            };
+            let profilingUntil = 0, profileStarted;
+            const requestFile = path.join(dir, 'cpu-profile.request');
             previous = undefined;
             while (!stopped && socket.readyState === WebSocket.OPEN) {
+                // Explicit one-shot request, observed on the PC only. No extra TV polling.
+                if (!profilingUntil && fs.existsSync(requestFile)) {
+                    fs.unlinkSync(requestFile);
+                    try {
+                        await call('Profiler.enable');
+                        stopProfiler = () => call('Profiler.stop', {}, 3000);
+                        await call('Profiler.start');
+                        profileStarted = new Date().toISOString();
+                        profilingUntil = Date.now() + 5000;
+                        writer.write({ type: 'cpu-profile', state: 'started', durationSeconds: 5 });
+                        console.log('CPU profile started (5 seconds).');
+                    } catch {
+                        if (stopProfiler) {
+                            try { await stopProfiler(); } catch { /* A timed-out start may still have taken effect. */ }
+                            stopProfiler = undefined;
+                        }
+                        writer.write({ type: 'cpu-profile', state: 'start-failed' });
+                        console.log('CPU profiler unavailable; ordinary recording continues.');
+                    }
+                }
+                if (profilingUntil && Date.now() >= profilingUntil) {
+                    let stage = 'stop';
+                    try {
+                        let result = await call('Profiler.stop', {}, 30000);
+                        stopProfiler = undefined;
+                        // This legacy WebKit can return a profile header instead of a profile.
+                        if (!result.profile) {
+                            stage = 'headers';
+                            const headers = await call('Profiler.getProfileHeaders');
+                            const header = headers.headers && headers.headers[headers.headers.length - 1];
+                            if (header) { stage = 'fetch'; result = await call('Profiler.getCPUProfile', { uid: header.uid }, 30000); }
+                        }
+                        if (!result.profile) throw new Error('missing-profile');
+                        stage = 'save';
+                        const file = 'ttcpu-' + writer.prefix + '-' + Date.now() + '.json';
+                        fs.writeFileSync(path.join(dir, file), JSON.stringify({ startedAt: profileStarted, stoppedAt: new Date().toISOString(), ...cleanProfile(result.profile) }), { flag: 'wx' });
+                        writer.write({ type: 'cpu-profile', state: 'saved', file });
+                        console.log('CPU profile saved:', file);
+                    } catch (error) {
+                        if (error.code && /^(ENOSPC|EACCES|EPERM|EROFS|EIO)$/.test(error.code)) throw error;
+                        writer.write({ type: 'cpu-profile', state: 'stop-failed', stage,
+                            reason: /^(timeout|protocol-command|protocol|disconnected|missing-profile)$/.test(error.message) ? error.message : 'profile-processing' });
+                        console.log('CPU profile could not be retrieved.');
+                    } finally { profilingUntil = 0; }
+                }
                 const started = performance.now(), s = await evaluate();
                 if (!s.app) throw new Error('different-app');
                 notice('recording');
@@ -175,7 +267,7 @@ async function record(host, dir) {
                 if (fresh.length && cursor && fresh[0].n > cursor + 1) writer.write({ type: 'log-gap', lost: fresh[0].n - cursor - 1 });
                 for (const entry of fresh) writer.write({ type: 'app', ...entry });
                 cursor = Math.max(cursor, last);
-                const now = performance.now(), sample = { type: 'sample', pollMs: now - started, frame: s.frame, video: s.video, stats: s.stats, tls: s.tls, nativePreviousPoll: s.native };
+                const now = performance.now(), sample = { type: 'sample', pollMs: now - started, frame: s.frame, video: s.video, stats: s.stats, tls: s.tls, nativePreviousPoll: s.native, memory: s.memory };
                 if (previous && previous.frame === s.frame && previous.time !== undefined && s.video && !s.video.seeking) {
                     sample.clockRatio = (s.video.time - previous.time) / ((now - previous.now) / 1000);
                 }
@@ -191,7 +283,13 @@ async function record(host, dir) {
                 const reason = /^(unavailable|disconnected|evaluation|protocol|timeout|different-app)$/.test(error.message) ? error.message : 'connection';
                 writer.write({ type: 'retry', reason });
             }
-        } finally { if (socket) socket.terminate(); }
+        } finally {
+            if (stopProfiler && socket && socket.readyState === WebSocket.OPEN) {
+                try { await stopProfiler(); } catch { /* Best effort if Inspector stopped replying. */ }
+            }
+            stopProfiler = undefined;
+            if (socket) socket.terminate();
+        }
         if (!stopped) await new Promise(r => setTimeout(r, 3000));
     }
     notice('stopped');
@@ -202,4 +300,4 @@ if (require.main === module) {
     if (!host || !/^[a-zA-Z0-9.-]+$/.test(host) || !dir) { console.error('Usage: node record-diagnostics.js TV_ADDRESS OUTPUT_DIRECTORY'); process.exitCode = 1; }
     else record(host, path.resolve(dir)).catch(() => { console.error('Recording stopped: cannot write diagnostics. Check free space and permissions.'); process.exitCode = 1; });
 }
-module.exports = { sanitize, Writer, snapshot };
+module.exports = { sanitize, Writer, snapshot, cleanProfile };

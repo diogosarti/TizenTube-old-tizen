@@ -1,64 +1,48 @@
-window.queuedVideos = {
-    videos: [],
-    lastVideoId: null
-};
-
 import resolveCommand from '../resolveCommand.js';
+import { watchPlayer } from '../utils/playerLifecycle.js';
+import { getQueuedVideoId } from '../utils/videoCards.js';
 
-function addListener() {
-    const videoPlayer = document.querySelector('.html5-video-player');
-    if (!videoPlayer) return setTimeout(addListener, 250);
-
-    videoPlayer.addEventListener('onStateChange', () => {
-        const playerStateObject = videoPlayer.getPlayerStateObject();
-        const videoData = videoPlayer.getVideoData();
-        if (window.queuedVideos.videos.length === 0) return;
-        if (playerStateObject.isEnded) {
-            const index = window.queuedVideos.videos.findIndex(v =>
-                (v.tileRenderer && v.tileRenderer.contentId === videoData.video_id) ||
-                (v.lockupViewModel && v.lockupViewModel.contentId === videoData.video_id)
-            );
-            if (index !== -1) {
-                if (index + 1 >= window.queuedVideos.videos.length) {
-                    resolveCommand({
-                        customAction: {
-                            action: 'CLEAR_QUEUE'
-                        }
-                    });
-                    return;
-                }
-                const element = window.queuedVideos.videos[index + 1];
-                const videoWatchEndpoint = element.tileRenderer ? element.tileRenderer.onSelectCommand : element.lockupViewModel.rendererContext.commandContext.onTap.innertubeCommand;
-                setTimeout(() => resolveCommand(videoWatchEndpoint), 500);
-            } else if (window.queuedVideos.lastVideoId) {
-                const lastIndex = window.queuedVideos.videos.findIndex(v =>
-                    v.tileRenderer?.contentId === window.queuedVideos.lastVideoId ||
-                    v.lockupViewModel?.contentId === window.queuedVideos.lastVideoId
-                );
-                if (lastIndex !== -1 && lastIndex + 1 < window.queuedVideos.videos.length) {
-                    const element = window.queuedVideos.videos[lastIndex + 1];
-                    const videoWatchEndpoint = element.tileRenderer ? element.tileRenderer.onSelectCommand : element.lockupViewModel.rendererContext.commandContext.onTap.innertubeCommand;
-                    setTimeout(() => resolveCommand(videoWatchEndpoint), 500);
-                } else {
-                    resolveCommand({
-                        customAction: {
-                            action: 'CLEAR_QUEUE'
-                        }
-                    });
-                    return;
-                }
-            } else {
-                const element = window.queuedVideos.videos[0];
-                const videoWatchEndpoint = element.tileRenderer ? element.tileRenderer.onSelectCommand : element.lockupViewModel.rendererContext.commandContext.onTap.innertubeCommand;
-                setTimeout(() => resolveCommand(videoWatchEndpoint), 500);
-            }
-        } else if (playerStateObject.isPlaying) {
-            document.getElementById('container').style.setProperty('opacity', '1', 'important');
-            if (window.queuedVideos.videos.find(v => v.contentId === videoData.video_id)) {
-                window.queuedVideos.lastVideoId = videoData.video_id;
-            }
-        }
-    });
+let player = null, video = null, advanceTimer = null, revision = 0;
+function cancelAdvance() {
+    clearTimeout(advanceTimer); advanceTimer = null; revision++;
 }
-
-addListener();
+window.queuedVideos = {
+    videos: [], lastVideoId: null,
+    add(card) { cancelAdvance(); this.videos.push(card); },
+    clear() { cancelAdvance(); this.videos = []; this.lastVideoId = null; }
+};
+function onStateChange() {
+    const queue = window.queuedVideos;
+    const state = player?.getPlayerStateObject?.();
+    const id = player?.getVideoData?.()?.video_id;
+    if (!state || !queue.videos.length) { cancelAdvance(); return; }
+    if (state.isPlaying) {
+        cancelAdvance();
+        const container = document.getElementById('container');
+        if (container) container.style.setProperty('opacity', '1', 'important');
+        if (queue.videos.some(card => getQueuedVideoId(card) === id)) queue.lastVideoId = id;
+        return;
+    }
+    if (!state.isEnded) { cancelAdvance(); return; }
+    if (advanceTimer !== null) return;
+    const index = queue.videos.findIndex(card => getQueuedVideoId(card) === id);
+    const previous = index !== -1 ? index : queue.videos.findIndex(card => getQueuedVideoId(card) === queue.lastVideoId);
+    const target = queue.videos[previous + 1];
+    if (!target) { resolveCommand({ customAction: { action: 'CLEAR_QUEUE' } }); return; }
+    const source = player, version = revision, list = queue.videos;
+    advanceTimer = setTimeout(() => {
+        advanceTimer = null;
+        if (version !== revision || source !== player || player.getVideoData()?.video_id !== id ||
+            !player.getPlayerStateObject()?.isEnded || list !== queue.videos || !queue.videos.includes(target)) return;
+        resolveCommand(target.tileRenderer ? target.tileRenderer.onSelectCommand : target.lockupViewModel.rendererContext.commandContext.onTap.innertubeCommand);
+    }, 500);
+}
+watchPlayer((next, nextVideo) => {
+    if (next === player && nextVideo === video) return;
+    cancelAdvance();
+    player?.removeEventListener('onStateChange', onStateChange);
+    player = next;
+    video = nextVideo;
+    if (player) { player.addEventListener('onStateChange', onStateChange); onStateChange(); }
+});
+window.addEventListener('hashchange', cancelAdvance);

@@ -1,5 +1,37 @@
 # Changelog
 
+## v2.4.1
+
+### Performance
+
+- Accelerated byte-array constructor copies on legacy WebKit while preserving compatibility for other input types.
+- Used native parsing for absolute HTTP(S) request URLs to reduce synchronous work in media and statistics handlers.
+- Removed redundant playback-request JSON serialization while preserving custom serialization behavior.
+
+### Network and memory
+
+- Filled binary responses with a known content length incrementally to reduce temporary buffering.
+- Released response buffers and cleared response metadata when aborting a completed XHR.
+- Fixed query-only and fragment-only redirect resolution.
+
+### Playback and queue
+
+- Reattached quality and queue handlers after player replacement and applied saved speed to each current video without permanent polling.
+- Fixed queued-video IDs and selected-card tracking for both supported card formats.
+- Cancelled stale automatic queue transitions and prevented duplicate transitions after repeated end events.
+
+### SponsorBlock
+
+- Applied enable/disable and category changes immediately, cancelling obsolete pending skips.
+- Validated response and segment data before marking SponsorBlock as available, while retaining valid highlight markers.
+
+### Settings and subtitles
+
+- Validated saved settings and recovered invalid values without sharing mutable defaults.
+- Kept settings effective for the current session and showed a notification when TV storage could not save them.
+- Applied each custom setting in a batch once while preserving native YouTube setting commands.
+- Preferred the selected interface language for subtitles and added a fallback for engines without Intl.Locale.
+
 ## v2.4.0
 
 - Improved media-response performance on legacy WebKit by restoring native byte-array copying.

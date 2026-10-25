@@ -10,6 +10,29 @@ const Logger = require('../web/logger');
 const proxy = require('../proxy');
 const { createServer } = require('../service');
 
+test('legacy constructor helper uses native copying for full byte views and retains generic copies', async () => {
+    const { legacyByteArrayCopy } = await import('../../mods/rollup.legacy.config.js');
+    const file = path.resolve(__dirname, '../../mods/node_modules/core-js/internals/array-from-constructor-and-list.js');
+    const plugin = legacyByteArrayCopy();
+    const transformed = plugin.transform(fs.readFileSync(file, 'utf8'), file);
+    let fast = 0;
+    const module = { exports: {} };
+    vm.runInNewContext(transformed.code, { module, require: () => value => value.length,
+        parent: { __legacyTLS: {}, Object, Uint8Array: { prototype: { set(source) { fast++; return Uint8Array.prototype.set.call(this, source); } } } } });
+    const copy = module.exports, source = new Uint8Array([3, 4, 5]);
+    const result = copy(Uint8Array, source);
+    assert.deepEqual([...result], [3, 4, 5]);
+    assert.notEqual(result.buffer, source.buffer);
+    source[0] = 9; assert.equal(result[0], 3);
+    assert.equal(fast, 1);
+    assert.deepEqual([...copy(Uint8Array, source, 2)], [9, 4]);
+    assert.deepEqual([...copy(Uint8Array, [1, 2])], [1, 2]);
+    assert.deepEqual([...copy(Uint16Array, new Uint16Array([300]))], [300]);
+    assert.equal(fast, 1, 'Other element types, arrays and explicit truncation keep core-js behavior');
+    assert.equal(plugin.transform('unchanged', '/other.js'), null);
+    assert.throws(() => plugin.transform('changed helper', file), /Unsupported core-js/);
+});
+
 test('Seek preview uses HTTPS without mutating shared frames and shows signed time from the seek origin', () => {
     const frame = { url: 'file://i.ytimg.com/sb/synthetic/storyboard.jpg', width: 100, height: 50 };
     function Storyboard() { this.props = { seekTime: 90 }; }
@@ -350,6 +373,40 @@ test('Missing storyboard is watched only inside the player during a bounded seek
     key({keyCode:37});assert.equal(observed,2);
 });
 
+test('Playback JSON uses one serialization and preserves replacer, spacing, getters and toJSON', () => {
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/features/adblock.js'),'utf8');
+    let calls=0,parsed=0,toJSON=0;
+    const JSONShim={stringify(...args){calls++;return JSON.stringify(...args);},parse(...args){parsed++;return JSON.parse(...args);}};
+    vm.runInNewContext(source.slice(source.indexOf('const origStringify ='),source.indexOf('window.JSON.stringify')),{JSON:JSONShim});
+    const ready={playbackContext:{contentPlaybackContext:{isInlinePlaybackNoAd:true}}};
+    assert.equal(JSONShim.stringify(ready),JSON.stringify(ready));assert.equal(calls,1);assert.equal(parsed,0);
+    const request={playbackContext:{contentPlaybackContext:{isInlinePlaybackNoAd:false}},extra:{toJSON(){toJSON++;return 'custom';}},omit:'hidden'};
+    calls=0;const text=JSONShim.stringify(request,(key,value)=>key==='omit'?undefined:value,2);
+    assert.equal(calls,1);assert.equal(parsed,0);assert.equal(toJSON,1);assert.ok(text.includes('\n  '));
+    assert.equal(JSON.parse(text).playbackContext.contentPlaybackContext.isInlinePlaybackNoAd,true);assert.equal(JSON.parse(text).omit,undefined);
+    assert.equal(request.playbackContext.contentPlaybackContext.isInlinePlaybackNoAd,false);
+    assert.equal(JSON.parse(JSONShim.stringify(request,['playbackContext','contentPlaybackContext','isInlinePlaybackNoAd'])).playbackContext.contentPlaybackContext.isInlinePlaybackNoAd,true);
+    let getters=0;const accessor={get playbackContext(){getters++;return {contentPlaybackContext:{isInlinePlaybackNoAd:false}};}};
+    JSONShim.stringify(accessor);assert.equal(getters,1);
+    const custom={playbackContext:{contentPlaybackContext:{}},toJSON(){return {custom:true};}};
+    assert.equal(JSONShim.stringify(custom),'{"custom":true}');
+    const special=JSON.parse('{"playbackContext":{"contentPlaybackContext":{}},"__proto__":{"marker":true}}');
+    assert.equal(JSONShim.stringify(special),JSON.stringify(special),'Preserve special own JSON keys without assigning them through prototype setters');
+});
+
+test('Setting batches apply custom entries once and delegate only native settings', () => {
+    const source=fs.readFileSync(path.resolve(__dirname,'../../mods/resolveCommand.js'),'utf8').replace(/^import[^\n]*\n/gm,'').replace(/^export default /gm,'').replace(/^export /gm,'');
+    const values={first:[],second:[]},writes=[],forwarded=[];
+    const window={_yttv:{app:{instance:{resolveCommand(cmd){forwarded.push(cmd);return 'native-result';}}}}};
+    vm.runInNewContext(source+'\npatchResolveCommand();',{window,configRead:key=>values[key],configWrite(key,value){writes.push(key);values[key]=value;}});
+    const native={clientSettingEnum:{item:'NATIVE_SETTING'},boolValue:true};
+    const cmd={setClientSettingEndpoint:{settingDatas:[{clientSettingEnum:{item:'first'},arrayValue:'a'},{clientSettingEnum:{item:'second'},arrayValue:'b'},native]}};
+    assert.equal(window._yttv.app.instance.resolveCommand(cmd),'native-result');
+    assert.deepEqual(writes,['first','second']);assert.equal(values.first[0],'a');assert.equal(values.second[0],'b');
+    assert.equal(forwarded.length,1);assert.equal(forwarded[0].setClientSettingEndpoint.settingDatas.length,1);assert.equal(forwarded[0].setClientSettingEndpoint.settingDatas[0],native);
+    assert.equal(cmd.setClientSettingEndpoint.settingDatas.length,3,'Do not mutate the caller command');
+});
+
 test('Legacy byte-array set uses native copies while preserving generic compatibility', () => {
     const frame=vm.runInNewContext('({Uint8Array,Int8Array,Object})');
     const native=Uint8Array.prototype.set;
@@ -415,7 +472,11 @@ test('local playback pings use current-account authorization only on YouTube HTT
     const log = Logger.create(20);
     const messages = [];
     const window = { __legacyLog: log, postMessage(...args) { messages.push(args); } };
-    vm.runInNewContext(source, { window, parent: window, document:{readyState:'complete'}, XMLHttpRequest: XHR, URL, Promise });
+    let parsed = 0;
+    class ParsedURL extends URL { constructor(...args) { super(...args); parsed++; } }
+    const document = { readyState: 'complete', createElement: () => new URL('https://example.test/') };
+    Object.assign(window, { __legacyTLS: {}, document, Object, Uint8Array });
+    vm.runInNewContext(source, { window, parent: window, document, XMLHttpRequest: XHR, URL: ParsedURL, Promise });
     window.postMessage('test', null);
     window.postMessage('test', { targetOrigin: '*', transfer: ['synthetic'] });
     assert.equal(messages[0][1], null);
@@ -434,6 +495,7 @@ test('local playback pings use current-account authorization only on YouTube HTT
     assert.equal(playback.url, 'https://www.youtube.com/api/stats/watchtime?synthetic=1');
     assert.equal(playback.headers.Authorization, 'Bearer synthetic-current-account');
     assert.equal(playback.sent, true);
+    assert.equal(parsed, 1, 'Relative malformed API URLs retain the base-URL parser');
     playback.status = 204; playback.listeners.load();
     assert.ok(log.read().some(entry => entry.code === 'history.result' && entry.detail.includes('authorized=true')));
     assert.doesNotMatch(JSON.stringify(log.read()), /synthetic-current-account/);
@@ -443,6 +505,9 @@ test('local playback pings use current-account authorization only on YouTube HTT
         assert.equal(other.sent, true);
         assert.equal(other.headers.Authorization, undefined);
     }
+    const media = 'https://rr1---sn-example.googlevideo.com/videoplayback?escaped=a%2Fb&same=1&same=2';
+    assert.equal(request(media).url, media, 'Native parsing preserves the media query');
+    assert.equal(parsed, 1, 'Full HTTP(S) addresses bypass the slow URL polyfill');
     const existing = new XHR(); existing.open('GET', 'https://www.youtube.com/api/stats/playback');
     existing.setRequestHeader('Authorization', 'Bearer synthetic-original'); existing.send();
     assert.equal(existing.headers.Authorization, 'Bearer synthetic-original');
@@ -575,7 +640,7 @@ test('SponsorBlock initializes in a local document and treats missing segments a
             body: element(), addEventListener() {}, removeEventListener() {},
             querySelector: selector => ({ video, '.html5-video-player': player, 'div[idomkey="slider"]': slider, 'ytlr-progress-bar': slider, 'ytlr-redux-connect-ytlr-progress-bar': container })[selector] || null
         },
-        location, URL, t: key => key, sha256: () => '1234', showToast() {},
+        location, URL, t: key => key, sha256: () => '1234', showToast() {}, configChangeEmitter:{addEventListener(){}},
         configRead: key => key === 'sponsorBlockManualSkips' ? [] : true,
         console: { info() {}, warn() {} }, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
         setInterval: fn => { intervals.push(fn); return intervals.length; }, clearInterval() {},

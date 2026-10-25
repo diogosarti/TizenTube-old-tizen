@@ -38,57 +38,62 @@ function alignPlayerShortcuts(controls) {
 if (window.__legacyDirect && parent.__legacyTLS) {
     let lastCDNNotice = 0;
     setInterval(() => {
-        const state = parent.__legacyTLS.summary();
-        if (state.cdnAddedAt > lastCDNNotice) {
-            lastCDNNotice = state.cdnAddedAt;
-            if (state.cdnCollecting && Date.now() - state.cdnAddedAt < 8000 && document.querySelector('video')) {
-                showToast(t('cdnJournal.title'), t('cdnJournal.added', { count: state.cdnProblems }));
+        const started = configRead('extendedDiagnostics') ? Date.now() : 0;
+        try {
+            const state = parent.__legacyTLS.summary();
+            if (state.cdnAddedAt > lastCDNNotice) {
+                lastCDNNotice = state.cdnAddedAt;
+                if (state.cdnCollecting && Date.now() - state.cdnAddedAt < 8000 && document.querySelector('video')) {
+                    showToast(t('cdnJournal.title'), t('cdnJournal.added', { count: state.cdnProblems }));
+                }
             }
-        }
-        const controls = document.querySelector('ytlr-player-actions-container');
-        let badge = document.querySelector('.tt-media-transport');
-        if (!controls) {
-            if (badge) badge.style.display = 'none';
-            return;
-        }
-        if (controls.classList.contains('zylon-hidden')) {
-            if (badge && badge.style.display !== 'none') badge.style.display = 'none';
-            return;
-        }
-        const style = window.getComputedStyle(controls);
-        if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity < 0.5) {
-            if (badge && badge.style.display !== 'none') badge.style.display = 'none';
-            return;
-        }
-        const instance = controls.__instance;
-        if (instance && instance.__ttRefreshCDNButton) instance.__ttRefreshCDNButton(state.cdnProblems > 0);
-        alignPlayerShortcuts(controls);
-        if (!badge) {
-            badge = document.createElement('span');
-            badge.className = 'tt-media-transport';
-            badge.style.cssText = 'position:fixed;right:36px;top:36px;z-index:10000;padding:8px 14px;background:rgba(0,0,0,.75);color:white;font-size:26px;border-radius:6px;pointer-events:none;white-space:pre;';
-            document.body.appendChild(badge);
-        }
-        const label = value => value === 'unknown' ? t('legacyNetwork.unknown') : value;
-        const lines = [];
-        if (configRead('showCDNCount') && state.cdnProblems > 0) lines.push(t('cdnJournal.counter', { count: state.cdnProblems }));
-        if (state.cdnPersistent === false) lines.push(t('cdnJournal.storageError'));
-        if (configRead('showPlayerProtocol')) {
-            lines.push(t('legacyNetwork.playerVideo', { transport: label(state.video) }));
-            if (state.audio && state.audio !== 'unknown' && state.audio !== state.video) {
-                lines[lines.length - 1] += ' · ' + t('legacyNetwork.playerAudio', { transport: label(state.audio) });
+            const controls = document.querySelector('ytlr-player-actions-container');
+            let badge = document.querySelector('.tt-media-transport');
+            if (!controls) {
+                if (badge) badge.style.display = 'none';
+                return;
             }
+            if (controls.classList.contains('zylon-hidden')) {
+                if (badge && badge.style.display !== 'none') badge.style.display = 'none';
+                return;
+            }
+            const style = window.getComputedStyle(controls);
+            if (style.display === 'none' || style.visibility === 'hidden' || +style.opacity < 0.5) {
+                if (badge && badge.style.display !== 'none') badge.style.display = 'none';
+                return;
+            }
+            const instance = controls.__instance;
+            if (instance && instance.__ttRefreshCDNButton) instance.__ttRefreshCDNButton(state.cdnProblems > 0);
+            alignPlayerShortcuts(controls);
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'tt-media-transport';
+                badge.style.cssText = 'position:fixed;right:36px;top:36px;z-index:10000;padding:8px 14px;background:rgba(0,0,0,.75);color:white;font-size:26px;border-radius:6px;pointer-events:none;white-space:pre;';
+                document.body.appendChild(badge);
+            }
+            const label = value => value === 'unknown' ? t('legacyNetwork.unknown') : value;
+            const lines = [];
+            if (configRead('showCDNCount') && state.cdnProblems > 0) lines.push(t('cdnJournal.counter', { count: state.cdnProblems }));
+            if (state.cdnPersistent === false) lines.push(t('cdnJournal.storageError'));
+            if (configRead('showPlayerProtocol')) {
+                lines.push(t('legacyNetwork.playerVideo', { transport: label(state.video) }));
+                if (state.audio && state.audio !== 'unknown' && state.audio !== state.video) {
+                    lines[lines.length - 1] += ' · ' + t('legacyNetwork.playerAudio', { transport: label(state.audio) });
+                }
+            }
+            const display = configRead('sponsorBlockStatusDisplay');
+            const availability = !configRead('enableSponsorBlock') ? 'disabled' :
+                window.sponsorblock ? window.sponsorblock.availability : 'checking';
+            if (display === 'always' || (display === 'unavailable' && availability === 'unavailable')) {
+                lines.push(t('legacyNetwork.sponsorStatus.' + availability));
+            }
+            const text = lines.join('\n');
+            if (badge.textContent !== text) badge.textContent = text;
+            const displayStyle = lines.length ? 'block' : 'none';
+            if (badge.style.display !== displayStyle) badge.style.display = displayStyle;
+        } finally {
+            if (started && Date.now() - started >= 50 && window.__legacyLog) window.__legacyLog.record('ui.controls-work', 'elapsedMs=' + (Date.now() - started));
         }
-        const display = configRead('sponsorBlockStatusDisplay');
-        const availability = !configRead('enableSponsorBlock') ? 'disabled' :
-            window.sponsorblock ? window.sponsorblock.availability : 'checking';
-        if (display === 'always' || (display === 'unavailable' && availability === 'unavailable')) {
-            lines.push(t('legacyNetwork.sponsorStatus.' + availability));
-        }
-        const text = lines.join('\n');
-        if (badge.textContent !== text) badge.textContent = text;
-        const displayStyle = lines.length ? 'block' : 'none';
-        if (badge.style.display !== displayStyle) badge.style.display = displayStyle;
     }, 500);
 }
 

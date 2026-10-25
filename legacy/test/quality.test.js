@@ -14,7 +14,7 @@ test('Preferred quality selects the nearest lower resolution, waits for metadata
         getPlayerStateObject: () => ({ isPlaying: true }), getVideoData: () => ({ video_id: 'synthetic' }), getVideoStats: () => ({}),
         getAvailableQualityData: () => qualities, setPlaybackQualityRange: (...args) => calls.push(args)
     };
-    vm.runInNewContext(source, { window: {}, document: { querySelector: () => player }, clearTimeout() {},
+    vm.runInNewContext(source, { window: {}, watchPlayer: fn => fn(player), clearTimeout() {},
         configRead: () => preference, configChangeEmitter: { addEventListener(type, fn) { configChange = fn; } } });
     assert.deepEqual(calls, [], 'Missing quality metadata must not force highres');
     qualities = [{ quality: 'hd1080', qualityLabel: '1080p' }, { quality: 'large', qualityLabel: '480p' }];
@@ -46,4 +46,41 @@ test('TLS settings default to Auto and retain every explicit mode', () => {
         assert.equal(JSON.parse(storage['ytaf-configuration']).tlsMode, expected);
         assert.equal(read('extendedDiagnostics'), false);
     }
+});
+
+test('Settings recover invalid storage shapes and apply live changes when persistence fails', () => {
+    const source=fs.readFileSync(path.join(__dirname,'../../mods/config.js'),'utf8').replace(/^export /gm,'');
+    for(const stored of [null,[],7,{enableSponsorBlock:'false',videoSpeed:null,sponsorBlockManualSkips:'intro'},
+        {videoSpeed:-1,speedSettingsIncrement:-1,sidebarContentsOrder:[null,{},'valid',{browseId:'custom',title:'Custom'}]}]) {
+        const api=vm.runInNewContext(source+'\n({read:configRead,defaults:defaultConfig});',{
+            window:{localStorage:{'ytaf-configuration':JSON.stringify(stored)}},console:{warn(){}}
+        });
+        assert.equal(api.read('enableSponsorBlock'),true);assert.equal(api.read('videoSpeed'),1);
+        assert.ok(api.read('speedSettingsIncrement')>0);assert.ok(!api.read('sidebarContentsOrder').includes(null));
+        api.read('sponsorBlockManualSkips').push('synthetic');
+        assert.ok(!api.defaults.sponsorBlockManualSkips.includes('synthetic'));
+    }
+    let applied,changes=0,errors=0;
+    const storage={};Object.defineProperty(storage,'ytaf-configuration',{get:()=>'{"tlsMode":"auto"}',set(){throw Error('QuotaExceededError');}});
+    const api=vm.runInNewContext(source+'\n({read:configRead,write:configWrite,events:configChangeEmitter});',{
+        window:{__legacyDirect:true,localStorage:storage},parent:{__legacyTLS:{setMode(value){applied=value;}}},
+        console:{warn(){},info(){}},setTimeout(fn){fn();},CustomEvent:class{constructor(type,options){this.type=type;this.detail=options&&options.detail;}}
+    });
+    api.events.addEventListener('configChange',()=>changes++);api.events.addEventListener('configStorageError',()=>errors++);
+    assert.doesNotThrow(()=>api.write('tlsMode','1.2'));assert.equal(applied,'1.2');assert.equal(api.read('tlsMode'),'1.2');assert.equal(changes,1);
+    api.write('tlsMode','auto');assert.equal(changes,2);assert.equal(errors,1,'Persistent storage failure must not flood notifications');
+});
+
+test('Quality detaches the old player and reapplies to replaced player or video', () => {
+    const source=fs.readFileSync(path.join(__dirname,'../../mods/features/preferredVideoQuality.js'),'utf8').replace(/^import[^\n]*\n/gm,'');
+    let watch,configChange,preference='720p';
+    function player(){return {listeners:new Set(),calls:[],addEventListener(type,fn){this.listeners.add(fn);},removeEventListener(type,fn){this.listeners.delete(fn);},
+        getPlayerStateObject:()=>({isPlaying:true}),getVideoData:()=>({video_id:'synthetic'}),getVideoStats:()=>({}),
+        getAvailableQualityData:()=>[{quality:'hd720',qualityLabel:'720p'},{quality:'large',qualityLabel:'480p'}],setPlaybackQualityRange(...args){this.calls.push(args);}};}
+    vm.runInNewContext(source,{window:{},watchPlayer(fn){watch=fn;},configRead:()=>preference,configChangeEmitter:{addEventListener(type,fn){configChange=fn;}}});
+    const a=player(),b=player();watch(a,{});watch(b,{});
+    assert.equal(a.listeners.size,0);assert.equal(b.listeners.size,1);
+    preference='480p';configChange({detail:{key:'preferredVideoQuality'}});
+    assert.equal(a.calls.length,1);assert.deepEqual(b.calls.at(-1),['large','large']);
+    watch(b,{});assert.equal(b.listeners.size,1);assert.equal(b.calls.length,3,'Replacing only the video must reapply the preference');
 });

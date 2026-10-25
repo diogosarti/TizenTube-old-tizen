@@ -1,7 +1,7 @@
 /*global navigate*/
 import '../spatial-navigation-polyfill.js';
 import css from './ui.css';
-import { configRead, configWrite } from '../config.js';
+import { configRead, configWrite, configChangeEmitter } from '../config.js';
 import updateStyle from './theme.js';
 import { showToast } from './ytUI.js';
 import modernUI from './settings.js';
@@ -9,6 +9,8 @@ import resolveCommand, { patchResolveCommand } from '../resolveCommand.js';
 import { pipToFullscreen } from '../features/pictureInPicture.js';
 import getCommandExecutor from './customCommandExecution.js';
 import { t } from 'i18next';
+
+configChangeEmitter.addEventListener('configStorageError', () => showToast('TizenTube', t('settingsStorageError')));
 
 // It just works, okay?
 const interval = setInterval(() => {

@@ -7,7 +7,9 @@
         if (base && !/^[a-z][a-z0-9+.-]*:/i.test(value)) {
             var b = win.document.createElement('a'); b.href = base;
             value = value.indexOf('//') === 0 ? b.protocol + value : b.protocol + '//' + b.host +
-                (value.charAt(0) === '/' ? value : b.pathname.replace(/[^/]*$/, '') + value);
+                (value.charAt(0) === '/' ? value : value.charAt(0) === '?' ? b.pathname + value :
+                 value.charAt(0) === '#' ? b.pathname + b.search + value : !value ? b.pathname + b.search :
+                 b.pathname.replace(/[^/]*$/, '') + value);
         }
         var a = win.document.createElement('a'); a.href = value; return a;
     }
@@ -345,7 +347,13 @@
     }
     function install(win, transport) {
         var NativeXHR = win.XMLHttpRequest, NativeBuffer = win.ArrayBuffer, NativeBytes = win.Uint8Array;
-        var nativeSetBytes = NativeBytes.prototype.set, live = [];
+        var nativeSetBytes = NativeBytes.prototype.set, live = [], assemblyPeakBytes = 0;
+        win.__legacyXHRMemory = function () {
+            if (!transport.diagnosticsEnabled()) return null;
+            var pending = 0;
+            live.forEach(function (xhr) { pending += xhr._binaryView ? xhr._binaryView.byteLength : xhr._length; });
+            return { pendingBytes: pending, pendingRequests: live.length, assemblyPeakBytes: assemblyPeakBytes };
+        };
         var interactionAt = -Infinity, leaving = false;
         function interacted() { interactionAt = Date.now(); }
         function unloading() { leaving = true; }
@@ -385,7 +393,7 @@
         function XHR() {
             this.upload = {}; events(this.upload); events(this);
             this._native = null; this._request = null; this._state = 0; this._status = 0; this._statusText = ''; this._url = '';
-            this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._length = 0; this._body = null;
+            this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._chunkCount = 0; this._length = 0; this._body = null; this._binaryView = null;
             this.timeout = 0; this.withCredentials = false; this.responseType = ''; this._sent = false;
             this._generation = 0; resetText(this);
         }
@@ -396,18 +404,21 @@
         }
         function state(xhr, value) { xhr._state = value; xhr._event('readystatechange'); }
         function untrack(xhr) { clearTimeout(xhr._timer); live = live.filter(function (item) { return item !== xhr; }); xhr._request = null; xhr._sent = false; }
-        function fail(xhr, type) {
-            var generation = xhr._generation;
-            transport.abort(xhr._request, type); untrack(xhr); xhr._chunks = []; xhr._body = null; xhr._length = 0;
+        function resetResponse(xhr) {
+            xhr._chunks = []; xhr._chunkCount = 0; xhr._body = null; xhr._binaryView = null; xhr._length = 0;
             xhr._status = 0; xhr._statusText = ''; xhr._responseHeaders = {}; xhr._url = '';
             resetText(xhr);
+        }
+        function fail(xhr, type) {
+            var generation = xhr._generation;
+            transport.abort(xhr._request, type); untrack(xhr); resetResponse(xhr);
             state(xhr, 4);
             if (xhr._generation !== generation) return;
             xhr._event(type);
             if (xhr._generation === generation) xhr._event('loadend');
         }
         XHR.prototype.open = function (method, url, async, user, password) {
-            this.abort(); this._method = String(method).toUpperCase(); this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._length = 0; this._body = null;
+            this.abort(); this._method = String(method).toUpperCase(); this._headers = {}; this._responseHeaders = {}; this._chunks = []; this._chunkCount = 0; this._length = 0; this._body = null; this._binaryView = null;
             this._generation++;
             this._traceId = this._nativeId = 0;
             resetText(this);
@@ -447,7 +458,7 @@
             if (this._native) { this._native.abort(); return; }
             var generation = this._generation;
             if (this._sent) fail(this, 'abort');
-            if (this._generation === generation) this._state = 0;
+            if (this._generation === generation) { resetResponse(this); this._state = 0; }
         };
         XHR.prototype.send = function (value) {
             if (this._native) { this._native.timeout = this.timeout; this._native.withCredentials = this.withCredentials; this._native.responseType = this.responseType; this._native.send(value); return; }
@@ -466,7 +477,22 @@
                     if (m.type === 'headers') {
                         self._status = m.status; self._statusText = m.statusText; self._responseHeaders = m.headers; self._url = m.url; state(self, 2);
                     } else if (m.type === 'data') {
-                        self._chunks.push(m.body); self._length += m.body.byteLength;
+                        try {
+                            var expected = +self._responseHeaders['content-length'];
+                            var encoding = self._responseHeaders['content-encoding'];
+                            if (!self._length && (self.responseType === 'arraybuffer' || self.responseType === 'blob') &&
+                                expected > 0 && expected <= 64 * 1024 * 1024 && expected % 1 === 0 &&
+                                (!encoding || encoding === 'identity') && !self._responseHeaders['transfer-encoding']) {
+                                self._body = new NativeBuffer(expected); self._binaryView = new NativeBytes(self._body);
+                            }
+                            if (self._binaryView && self._length + m.body.byteLength > self._binaryView.byteLength) {
+                                self._chunks.push(self._body.slice(0, self._length)); self._body = null; self._binaryView = null;
+                            }
+                            if (self._binaryView) nativeSetBytes.call(self._binaryView, new NativeBytes(m.body), self._length);
+                            else self._chunks.push(m.body);
+                            self._length += m.body.byteLength;
+                            self._chunkCount++;
+                        } catch (_) { fail(self, 'error'); return; }
                         var now = Date.now();
                         if (now - self._lastProgress < 50) return;
                         self._lastProgress = now;
@@ -474,14 +500,27 @@
                         if (self._sent && self._generation === generation) self._event('progress', self._length, +self._responseHeaders['content-length'] || 0);
                     } else if (m.type === 'done') {
                         var measured = transport.diagnosticsEnabled(), started = measured ? Date.now() : 0;
-                        var rid = self._traceId, id = self._nativeId, length = self._length, chunks = self._chunks.length, assembleMs = 0;
+                        var rid = self._traceId, id = self._nativeId, length = self._length, chunks = self._chunkCount, assembleMs = 0;
                         try {
                             var total = +self._responseHeaders['content-length'] || 0;
                             self._event('progress', self._length, total);
                             if (!self._sent || self._generation !== generation) return;
                             var assembleStart = measured ? Date.now() : 0;
                             // Match native XHR: the response belongs to the requesting window.
-                            if (self.responseType === 'arraybuffer' || self.responseType === 'blob') self._body = combine(self._chunks, self._length, NativeBuffer, NativeBytes, nativeSetBytes);
+                            if (self.responseType === 'arraybuffer' || self.responseType === 'blob') {
+                                var assemblyBytes = self._binaryView ? self._binaryView.byteLength : self._length;
+                                if (self._binaryView) {
+                                    if (self._length !== self._body.byteLength) {
+                                        self._body = self._body.slice(0, self._length); assemblyBytes += self._body.byteLength;
+                                    }
+                                } else {
+                                    var reused = self._chunks.length === 1 && self._chunks[0] instanceof NativeBuffer;
+                                    self._body = combine(self._chunks, self._length, NativeBuffer, NativeBytes, nativeSetBytes);
+                                    if (!reused) assemblyBytes += self._body.byteLength;
+                                }
+                                if (measured) assemblyPeakBytes = Math.max(assemblyPeakBytes, assemblyBytes);
+                                self._binaryView = null;
+                            }
                             else decoded(self, true);
                             if (measured) assembleMs = Date.now() - assembleStart;
                             self._chunks = []; untrack(self);

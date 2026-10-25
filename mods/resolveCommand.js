@@ -38,35 +38,33 @@ export function patchResolveCommand() {
             const ogResolve = window._yttv[key].instance.resolveCommand;
             window._yttv[key].instance.resolveCommand = function (cmd, _) {
                 if (cmd.setClientSettingEndpoint) {
-                    // Command to change client settings. Use TizenTube configuration to change settings.
-                    for (const settings of cmd.setClientSettingEndpoint.settingDatas) {
-                        if (!settings.clientSettingEnum.item.includes('_')) {
-                            for (const setting of cmd.setClientSettingEndpoint.settingDatas) {
-                                const valName = Object.keys(setting).find(key => key.includes('Value'));
-                                const value = valName === 'intValue' ? Number(setting[valName]) : setting[valName];
-                                if (valName === 'arrayValue') {
-                                    const arr = configRead(setting.clientSettingEnum.item);
-                                    if (arr.includes(value)) {
-                                        arr.splice(arr.indexOf(value), 1);
-                                    } else {
-                                        arr.push(value);
-                                    }
-                                    configWrite(setting.clientSettingEnum.item, arr);
-                                } else configWrite(setting.clientSettingEnum.item, value);
-                            }
-                        } else if (settings.clientSettingEnum.item === 'I18N_LANGUAGE') {
-                            const lang = settings.stringValue;
-                            const date = new Date();
-                            date.setFullYear(date.getFullYear() + 10);
-                            document.cookie = `PREF=hl=${lang}; expires=${date.toUTCString()};`;
-                            resolveCommand({
-                                signalAction: {
-                                    signal: 'RELOAD_PAGE'
-                                }
-                            });
-                            return true;
-                        }
+                    const nativeSettings = [];
+                    let language = null;
+                    for (const setting of cmd.setClientSettingEndpoint.settingDatas) {
+                        const key = setting.clientSettingEnum.item;
+                        if (!key.includes('_')) {
+                            const valName = Object.keys(setting).find(key => key.includes('Value'));
+                            const value = valName === 'intValue' ? Number(setting[valName]) : setting[valName];
+                            if (valName === 'arrayValue') {
+                                const array = configRead(key).slice();
+                                const index = array.indexOf(value);
+                                if (index < 0) array.push(value); else array.splice(index, 1);
+                                configWrite(key, array);
+                            } else configWrite(key, value);
+                        } else if (key === 'I18N_LANGUAGE') language = setting.stringValue;
+                        else nativeSettings.push(setting);
                     }
+                    let result = true;
+                    if (nativeSettings.length) {
+                        const endpoint = Object.assign({}, cmd.setClientSettingEndpoint, { settingDatas: nativeSettings });
+                        result = ogResolve.call(this, Object.assign({}, cmd, { setClientSettingEndpoint: endpoint }), _);
+                    }
+                    if (language !== null) {
+                        const date = new Date(); date.setFullYear(date.getFullYear() + 10);
+                        document.cookie = `PREF=hl=${language}; expires=${date.toUTCString()};`;
+                        resolveCommand({ signalAction: { signal: 'RELOAD_PAGE' } });
+                    }
+                    return result;
                 } else if (cmd.customAction) {
                     customAction(cmd.customAction.action, cmd.customAction.parameters);
                     return true;
@@ -243,11 +241,11 @@ function customAction(action, parameters) {
             showToast('TizenTube', parameters);
             break;
         case 'ADD_TO_QUEUE':
-            window.queuedVideos.videos.push(parameters);
+            window.queuedVideos.add(parameters);
             showToast('TizenTube', t('toasts.videoAddedToQueue'));
             break;
         case 'CLEAR_QUEUE':
-            window.queuedVideos.videos = [];
+            window.queuedVideos.clear();
             showToast('TizenTube', t('toasts.videoQueueCleared'));
             break;
         case 'CHECK_FOR_UPDATES':

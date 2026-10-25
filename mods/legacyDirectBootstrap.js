@@ -50,7 +50,16 @@ window.yt.player.Application = window.yt.player.Application || {};
 const open = XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open = function (method, url) {
     const args = Array.prototype.slice.call(arguments);
-    const target = new URL(url, 'https://www.youtube.com/tv');
+    const value = String(url);
+    let target;
+    // Full URLs need no JS URL parser: long media/statistics queries are costly
+    // to parse character by character on the old WebKit.
+    if (parent.__legacyTLS && /^https?:\/\//i.test(value)) {
+        target = parent.document.createElement('a');
+        target.href = value;
+    } else {
+        target = new URL(value, 'https://www.youtube.com/tv');
+    }
     // An empty document hostname turns ///api/stats/... into https://api/stats/....
     if (target.hostname === 'api' && /^\/stats\/(playback|watchtime|qoe|delayplay|atr|engage)$/.test(target.pathname)) {
         target.hostname = 'www.youtube.com';

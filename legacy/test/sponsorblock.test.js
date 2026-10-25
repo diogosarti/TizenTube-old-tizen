@@ -84,7 +84,7 @@ test('SponsorBlock waits for playback to reach the segment and reschedules for p
     const video = { currentTime: 100, duration: 600, paused: false, seeking: false, readyState: 4, playbackRate: 1,
         addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type) { listeners.delete(type); } };
     const Handler = vm.runInNewContext(source.slice(source.indexOf('class SponsorBlockHandler'), source.indexOf('// When this global')) + '\nSponsorBlockHandler;', {
-        window: { __legacyDirect: true }, console: { info() {} }, configRead: () => false, barTypes: { sponsor: { name: 'sponsor' } },
+        window: { __legacyDirect: true }, console: { info() {} }, configRead: key => key === 'enableSponsorBlock', barTypes: { sponsor: { name: 'sponsor' } },
         document: { querySelector: selector => selector === 'video' ? video : { seekTo: target => seeks.push(target) } },
         setTimeout(fn, delay) { timers.set(++id, { fn, delay }); return id; }, clearTimeout(key) { timers.delete(key); }
     });
@@ -132,7 +132,7 @@ test('SponsorBlock does not repeat a seek rounded to an earlier keyframe and rea
     const timers=new Map(),seeks=[];let id=0,now=10000;
     const video={currentTime:165,duration:600,paused:false,seeking:false,readyState:4,playbackRate:1};
     const Handler=vm.runInNewContext(source.slice(source.indexOf('class SponsorBlockHandler'),source.indexOf('// When this global'))+'\nSponsorBlockHandler;',{
-        window:{__legacyDirect:true},console:{info(){}},Date:{now:()=>now},configRead:()=>false,barTypes:{sponsor:{name:'sponsor'}},
+        window:{__legacyDirect:true},console:{info(){}},Date:{now:()=>now},configRead:key=>key==='enableSponsorBlock',barTypes:{sponsor:{name:'sponsor'}},
         document:{querySelector:()=>({seekTo(target){seeks.push(target);video.seeking=true;}})},
         setTimeout(fn,delay){timers.set(++id,{fn,delay});return id;},clearTimeout(key){timers.delete(key);}
     });
@@ -176,7 +176,7 @@ test('SponsorBlock rebinds a replaced video without duplicate listeners or anoth
 test('SponsorBlock navigation destroys the handler on exit but preserves matching PiP playback', () => {
     const source=fs.readFileSync(path.join(__dirname,'../../mods/features/sponsorblock.js'),'utf8');
     let navigation,destroyed=0,playingID='synthetic';
-    const context={URL,location:{hash:'#/watch?v=synthetic'},configRead:()=>true,
+    const context={URL,location:{hash:'#/watch?v=synthetic'},configRead:()=>true,configChangeEmitter:{addEventListener(){}},
         window:{addEventListener(type,fn){navigation=fn;},removeEventListener(){}},
         document:{baseURI:'https://example.test/',querySelector:()=>({getVideoData:()=>({video_id:playingID})})},
         console:{info(){},warn(){}},clearTimeout(){}};
@@ -217,7 +217,7 @@ test('Manual SponsorBlock prompt uses late segments and ignores keys after leavi
     let keyHandler, removed = false;
     const button = { style: {}, remove() { removed = true; } }, seeks = [];
     const Handler = vm.runInNewContext(source.slice(source.indexOf('class SponsorBlockHandler'), source.indexOf('// When this global')) + '\nSponsorBlockHandler;', {
-        window: { __legacyDirect: true }, t: value => value, clearTimeout() {}, console: { info() {} },
+        window: { __legacyDirect: true }, t: value => value, configRead:()=>true, clearTimeout() {}, console: { info() {} },
         document: { createElement: () => button, body: { appendChild() {} },
             addEventListener(type, fn) { keyHandler = fn; }, removeEventListener() {},
             querySelector: selector => selector === '.html5-video-player' ? { seekTo: target => seeks.push(target) } : null }
@@ -250,4 +250,41 @@ test('Watched filtering honors its switch and handles both video card formats', 
     assert.equal(hide(cards), cards);
     config.enableHideWatchedVideos = true;
     assert.deepEqual(Array.from(hide(cards)), [cards[2]]);
+});
+
+test('SponsorBlock rejects malformed response schemas while accepting empty and point segments', async()=>{
+    const source=fs.readFileSync(path.join(__dirname,'../../mods/features/sponsorblock.js'),'utf8');
+    const Handler=vm.runInNewContext(source.slice(source.indexOf('class SponsorBlockHandler'),source.indexOf('// When this global'))+'\nSponsorBlockHandler;',{
+        sha256:()=> 'abcd',sponsorblockAPI:'https://example.test',window:{addEventListener(){}},document:{addEventListener(){}},configRead:()=>[],console:{info(){}}
+    });
+    for(const data of [{},[{videoID:'synthetic',segments:{}}],[{videoID:'synthetic',segments:[{UUID:'bad',category:'sponsor',segment:[20,10]}]}]]) {
+        const h=new Handler('synthetic');h.requestSegments=async()=>data;await assert.rejects(h.init(),/Invalid SponsorBlock/);assert.equal(h.availability,'unavailable');
+    }
+    for(const data of [[],[{videoID:'synthetic',segments:[{UUID:'point',category:'poi_highlight',segment:[10,10]}]}]]) {
+        const h=new Handler('synthetic');h.requestSegments=async()=>data;h.attachVideo=h.installManualSkip=h.buildOverlay=()=>{};
+        await h.init();assert.equal(h.availability,'available');
+    }
+});
+
+test('SponsorBlock applies live category changes and cancels disabled handlers before reenabling the same video',async()=>{
+    const source=fs.readFileSync(path.join(__dirname,'../../mods/features/sponsorblock.js'),'utf8');
+    const settings={enableSponsorBlock:true,enableSponsorBlockSponsor:true,sponsorBlockManualSkips:[]};const timers=new Map();let timer=0,changed;
+    const video={currentTime:9,duration:100,paused:false,seeking:false,readyState:4,playbackRate:1,listeners:new Set(),
+        addEventListener(type,fn){this.listeners.add(type+':'+fn);},removeEventListener(type,fn){this.listeners.delete(type+':'+fn);}};
+    const context={window:{addEventListener(){},removeEventListener(){}},URL,location:{hash:'#/watch?v=synthetic'},
+        document:{baseURI:'https://example.test/',addEventListener(){},removeEventListener(){},querySelector:s=>s==='video'?video:{getVideoData:()=>({video_id:'synthetic'})}},
+        configRead:key=>settings[key]||false,configChangeEmitter:{addEventListener(type,fn){changed=fn;}},
+        console:{info(){},warn(){}},sha256:()=> 'abcd',sponsorblockAPI:'https://example.test',
+        setTimeout(fn){timers.set(++timer,fn);return timer;},clearTimeout(id){timers.delete(id);}};
+    vm.createContext(context);const boundary=source.indexOf('// When this global');
+    vm.runInContext(source.slice(source.indexOf('class SponsorBlockHandler'),boundary)+
+        '\nSponsorBlockHandler.prototype.requestSegments=async()=>[{videoID:"synthetic",segments:[{UUID:"test",category:"sponsor",segment:[10,20]}]}];'+
+        '\nSponsorBlockHandler.prototype.buildOverlay=SponsorBlockHandler.prototype.installManualSkip=function(){};',context);
+    vm.runInContext(source.slice(boundary),context);await new Promise(resolve=>setImmediate(resolve));
+    const old=context.window.sponsorblock;old.scheduleSkip();assert.equal(timers.size,1);
+    settings.enableSponsorBlockSponsor=false;changed({detail:{key:'enableSponsorBlockSponsor'}});assert.equal(timers.size,0);
+    settings.enableSponsorBlockSponsor=true;changed({detail:{key:'enableSponsorBlockSponsor'}});assert.equal(timers.size,1);
+    settings.enableSponsorBlock=false;changed({detail:{key:'enableSponsorBlock'}});assert.equal(context.window.sponsorblock,null);assert.equal(timers.size,0);assert.equal(old.active,false);assert.equal(video.listeners.size,0);
+    settings.enableSponsorBlock=true;changed({detail:{key:'enableSponsorBlock'}});await new Promise(resolve=>setImmediate(resolve));
+    assert.ok(context.window.sponsorblock);assert.notEqual(context.window.sponsorblock,old);assert.equal(context.window.sponsorblock.videoID,'synthetic');
 });
